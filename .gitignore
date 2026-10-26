@@ -1,0 +1,29 @@
+# Build & Publish directories
+[Bb]in/
+[Oo]bj/
+[Pp]ublish/
+[Rr]elease/
+
+# Root compiled app outputs (keep third-party MeltySynth.dll & NAudio.*.dll)
+WinMusicXmlPlayer.exe
+WinMusicXmlPlayer.dll
+WinMusicXmlPlayer.pdb
+WinMusicXmlPlayer.deps.json
+WinMusicXmlPlayer.runtimeconfig.json
+*.zip
+
+# Runtime & verification outputs
+user_preferences.json
+verification_report.txt
+
+# MusicXML score files
+*.musicxml
+*.mxl
+
+# IDE & OS files
+.vs/
+.idea/
+*.user
+*.suo
+Thumbs.db
+.DS_Store

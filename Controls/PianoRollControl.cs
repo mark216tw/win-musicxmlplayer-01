@@ -29,6 +29,16 @@ namespace WinMusicXmlPlayer.Controls
         private double _dragStartTimeSec;
         private bool _dragFromTopRuler;
 
+        // A-B 區間循環視覺標記與滑鼠懸停音符狀態
+        private double? _loopStartSec;
+        private double? _loopEndSec;
+        private bool _isLoopEnabled;
+        private NoteEvent? _hoveredNote;
+
+        private static readonly Brush LoopRegionFillBrush = CreateFrozenBrush(Color.FromArgb(36, 251, 191, 36));
+        private static readonly Brush LoopRulerBadgeBrush = CreateFrozenBrush(Color.FromArgb(220, 217, 119, 6));
+        private static readonly Pen LoopBoundaryPen = CreateFrozenPen(Color.FromRgb(251, 191, 36), 1.8);
+
         private static readonly Typeface UiTypeface = new(new FontFamily("Segoe UI, Microsoft JhengHei UI"), FontStyles.Normal, FontWeights.SemiBold, FontStretches.Normal);
 
         // 深色模式畫筆
@@ -49,9 +59,143 @@ namespace WinMusicXmlPlayer.Controls
         private static readonly Pen BeatLinePen = new(new SolidColorBrush(Color.FromArgb(38, 148, 163, 184)), 1.0);
         private static readonly Pen ActiveNoteBorderPen = new(Brushes.White, 1.6);
 
+        private static readonly Brush DarkRulerLabelBrush = CreateFrozenBrush(Color.FromRgb(203, 213, 225));
+        private static readonly Brush LightRulerLabelBrush = CreateFrozenBrush(Color.FromRgb(51, 65, 85));
+        private static readonly Brush DarkNormalPitchBrush = CreateFrozenBrush(Color.FromRgb(148, 163, 184));
+        private static readonly Brush LightNormalPitchBrush = CreateFrozenBrush(Color.FromRgb(71, 85, 105));
+        private static readonly Brush DarkHintBgBrush = CreateFrozenBrush(Color.FromArgb(195, 15, 23, 42));
+        private static readonly Brush LightHintBgBrush = CreateFrozenBrush(Color.FromArgb(225, 255, 255, 255));
+        private static readonly Pen DarkHintBorderPen = CreateFrozenPen(Color.FromRgb(51, 65, 85), 1.0);
+        private static readonly Pen LightHintBorderPen = CreateFrozenPen(Color.FromRgb(203, 213, 225), 1.0);
+
+        // 快取的主題連動 Frozen Brushes / Pens，僅在主題變更時重建
+        private Color _cachedBgColor;
+        private Color _cachedBlackLaneColor;
+        private Color _cachedRulerColor;
+        private Color _cachedAccentColor;
+        private Brush _rollBgBrush = DarkBgBrush;
+        private Brush _blackLaneBrush = DarkBlackKeyLaneBrush;
+        private Brush _rulerBrush = DarkTopRulerBrush;
+        private Brush _accentBrush = Brushes.DodgerBlue;
+        private Brush _playheadGlowBrush = Brushes.Transparent;
+        private Pen _playheadPen = new(Brushes.DodgerBlue, 2.4);
+        private Pen _scrubBannerBorderPen = new(Brushes.DodgerBlue, 1.5);
+
+        // 快取的 FormattedText，避免每幀重複呼叫 DirectWrite 文字排版
+        private double _cachedTextDpi;
+        private bool _cachedTextIsDark;
+        private Color _cachedTextAccentColor;
+        private FormattedText? _cachedHintFt;
+        private FormattedText? _cachedEmptyFt;
+        private readonly FormattedText?[] _cachedPitchLabels = new FormattedText?[128];
+
+        private static SolidColorBrush CreateFrozenBrush(Color c)
+        {
+            var b = new SolidColorBrush(c);
+            b.Freeze();
+            return b;
+        }
+
+        private static Pen CreateFrozenPen(Color c, double thickness)
+        {
+            var p = new Pen(CreateFrozenBrush(c), thickness);
+            p.Freeze();
+            return p;
+        }
+
+        private void EnsureThemeBrushesUpdated()
+        {
+            Color bg = ThemeManager.CurrentRollBgColor;
+            Color lane = ThemeManager.CurrentRollBlackLaneColor;
+            Color ruler = ThemeManager.CurrentRollRulerColor;
+            Color accent = ThemeManager.CurrentAccentColor;
+
+            if (bg != _cachedBgColor)
+            {
+                _cachedBgColor = bg;
+                _rollBgBrush = CreateFrozenBrush(bg);
+            }
+            if (lane != _cachedBlackLaneColor)
+            {
+                _cachedBlackLaneColor = lane;
+                _blackLaneBrush = CreateFrozenBrush(lane);
+            }
+            if (ruler != _cachedRulerColor)
+            {
+                _cachedRulerColor = ruler;
+                _rulerBrush = CreateFrozenBrush(ruler);
+            }
+            if (accent != _cachedAccentColor)
+            {
+                _cachedAccentColor = accent;
+                _accentBrush = CreateFrozenBrush(accent);
+                _playheadGlowBrush = CreateFrozenBrush(Color.FromArgb(46, accent.R, accent.G, accent.B));
+                _playheadPen = CreateFrozenPen(accent, 2.4);
+                _scrubBannerBorderPen = CreateFrozenPen(accent, 1.5);
+            }
+        }
+
+        private void EnsureStaticTextsCached(double dpi, bool isDark)
+        {
+            Color accent = ThemeManager.CurrentAccentColor;
+            if (Math.Abs(_cachedTextDpi - dpi) <= 0.001 &&
+                _cachedTextIsDark == isDark &&
+                _cachedTextAccentColor == accent &&
+                _cachedHintFt != null)
+            {
+                return;
+            }
+
+            _cachedTextDpi = dpi;
+            _cachedTextIsDark = isDark;
+            _cachedTextAccentColor = accent;
+
+            _cachedHintFt = new FormattedText(
+                "⇄ 左鍵拖曳調時間 · 右鍵設 A-B 循環 · 滾輪縮放視野 · 點擊下方琴鍵試聽",
+                CultureInfo.InvariantCulture,
+                FlowDirection.LeftToRight,
+                UiTypeface,
+                11.0,
+                isDark ? DarkRulerLabelBrush : LightRulerLabelBrush,
+                dpi);
+
+            _cachedEmptyFt = new FormattedText(
+                "請點擊左上角「開啟 MusicXML」或將樂譜檔案拖曳至此視窗開始播放",
+                CultureInfo.InvariantCulture,
+                FlowDirection.LeftToRight,
+                UiTypeface,
+                15.0,
+                isDark ? DarkNormalPitchBrush : LightNormalPitchBrush,
+                dpi);
+
+            Array.Clear(_cachedPitchLabels, 0, _cachedPitchLabels.Length);
+        }
+
+        private FormattedText GetCachedPitchLabel(int pitch, double dpi, bool isDark)
+        {
+            int clamped = Math.Clamp(pitch, 0, 127);
+            var ft = _cachedPitchLabels[clamped];
+            if (ft != null)
+                return ft;
+
+            Brush normalPitchBrush = isDark ? DarkNormalPitchBrush : LightNormalPitchBrush;
+            ft = new FormattedText(
+                NoteEvent.GetPitchName(clamped),
+                CultureInfo.InvariantCulture,
+                FlowDirection.LeftToRight,
+                UiTypeface,
+                10.0,
+                clamped == 60 ? _accentBrush : normalPitchBrush,
+                dpi);
+            _cachedPitchLabels[clamped] = ft;
+            return ft;
+        }
+
         public event Action<double>? TimeScrubbed;
         public event Action? ScrubStarted;
         public event Action? ScrubEnded;
+        public event Action<double>? LoopPointRightClicked;
+        public event Action<double>? VisibleWindowChanged;
 
         static PianoRollControl()
         {
@@ -104,6 +248,7 @@ namespace WinMusicXmlPlayer.Controls
                 if (Math.Abs(_visibleWindowSeconds - clamped) > 0.01)
                 {
                     _visibleWindowSeconds = clamped;
+                    VisibleWindowChanged?.Invoke(_visibleWindowSeconds);
                     InvalidateVisual();
                 }
             }
@@ -113,6 +258,18 @@ namespace WinMusicXmlPlayer.Controls
         {
             _score = score;
             _currentTimeSec = 0;
+            _loopStartSec = null;
+            _loopEndSec = null;
+            _isLoopEnabled = false;
+            _hoveredNote = null;
+            InvalidateVisual();
+        }
+
+        public void SetLoopMarkers(double? startSec, double? endSec, bool isEnabled)
+        {
+            _loopStartSec = startSec;
+            _loopEndSec = endSec;
+            _isLoopEnabled = isEnabled;
             InvalidateVisual();
         }
 
@@ -145,13 +302,140 @@ namespace WinMusicXmlPlayer.Controls
             InvalidateVisual();
         }
 
+        protected override void OnMouseRightButtonDown(MouseButtonEventArgs e)
+        {
+            base.OnMouseRightButtonDown(e);
+            if (_score == null) return;
+
+            Point pt = e.GetPosition(this);
+            double clickedSec = ResolveTimeAtPoint(pt);
+            LoopPointRightClicked?.Invoke(clickedSec);
+            e.Handled = true;
+        }
+
         protected override void OnMouseMove(MouseEventArgs e)
         {
             base.OnMouseMove(e);
-            if (!_isDraggingTime || _score == null) return;
+            if (_score == null) return;
 
             Point pt = e.GetPosition(this);
-            UpdateScrubFromMouse(pt);
+            if (_isDraggingTime)
+            {
+                UpdateScrubFromMouse(pt);
+                return;
+            }
+
+            var hitNote = HitTestNoteAtPoint(pt);
+            if (!ReferenceEquals(hitNote, _hoveredNote))
+            {
+                _hoveredNote = hitNote;
+                InvalidateVisual();
+            }
+        }
+
+        protected override void OnMouseLeave(MouseEventArgs e)
+        {
+            base.OnMouseLeave(e);
+            if (_hoveredNote != null)
+            {
+                _hoveredNote = null;
+                InvalidateVisual();
+            }
+        }
+
+        private double ResolveTimeAtPoint(Point pt)
+        {
+            if (_score == null) return 0.0;
+            double w = Math.Max(100, ActualWidth);
+            double h = Math.Max(100, ActualHeight);
+
+            if (_viewMode == PianoRollViewMode.HorizontalTimeline)
+            {
+                double leftPitchLabelW = 44.0;
+                double canvasW = Math.Max(50, w - leftPitchLabelW);
+                double playheadX = leftPitchLabelW + canvasW * 0.24;
+                double pxPerSec = canvasW / _visibleWindowSeconds;
+                double t = _currentTimeSec + (pt.X - playheadX) / pxPerSec;
+                return Math.Clamp(t, 0.0, _score.TotalDurationSeconds);
+            }
+            else
+            {
+                double lookaheadSec = _visibleWindowSeconds * 0.65;
+                double pxPerSec = h / lookaheadSec;
+                double t = _currentTimeSec + (h - pt.Y) / pxPerSec;
+                return Math.Clamp(t, 0.0, _score.TotalDurationSeconds);
+            }
+        }
+
+        private NoteEvent? HitTestNoteAtPoint(Point pt)
+        {
+            if (_score == null || _score.Notes.Count == 0) return null;
+            double w = ActualWidth;
+            double h = ActualHeight;
+            if (w <= 10 || h <= 10) return null;
+
+            var notes = _score.Notes;
+            if (_viewMode == PianoRollViewMode.HorizontalTimeline)
+            {
+                double rulerH = 28.0;
+                double leftPitchLabelW = 44.0;
+                if (pt.X < leftPitchLabelW || pt.Y < rulerH) return null;
+
+                double rollH = Math.Max(40, h - rulerH);
+                double canvasW = Math.Max(50, w - leftPitchLabelW);
+                int minPitch = Math.Max(21, _score.MinMidiPitch);
+                int maxPitch = Math.Min(108, _score.MaxMidiPitch);
+                if (maxPitch - minPitch < 24)
+                {
+                    int mid = (minPitch + maxPitch) / 2;
+                    minPitch = Math.Max(21, mid - 12);
+                    maxPitch = Math.Min(108, mid + 12);
+                }
+                int pitchSpan = maxPitch - minPitch + 1;
+                double rowH = rollH / pitchSpan;
+                int hoverPitch = maxPitch - (int)((pt.Y - rulerH) / rowH);
+                if (hoverPitch < minPitch || hoverPitch > maxPitch) return null;
+
+                double playheadX = leftPitchLabelW + canvasW * 0.24;
+                double pxPerSec = canvasW / _visibleWindowSeconds;
+                double hoverTimeSec = _currentTimeSec + (pt.X - playheadX) / pxPerSec;
+
+                int startIdx = _score.FindFirstNoteIndexForWindow(hoverTimeSec - 0.05);
+                for (int i = startIdx; i < notes.Count; i++)
+                {
+                    var n = notes[i];
+                    if (n.StartTimeSeconds > hoverTimeSec + 0.02) break;
+                    if (n.MidiPitch == hoverPitch &&
+                        hoverTimeSec >= n.StartTimeSeconds &&
+                        hoverTimeSec <= n.EndTimeSeconds &&
+                        _score.Tracks[n.TrackIndex].IsVisibleOnRoll)
+                    {
+                        return n;
+                    }
+                }
+            }
+            else
+            {
+                double lookaheadSec = _visibleWindowSeconds * 0.65;
+                double pxPerSec = h / lookaheadSec;
+                double hoverTimeSec = _currentTimeSec + (h - pt.Y) / pxPerSec;
+
+                int startIdx = _score.FindFirstNoteIndexForWindow(hoverTimeSec - 0.05);
+                for (int i = startIdx; i < notes.Count; i++)
+                {
+                    var n = notes[i];
+                    if (n.StartTimeSeconds > hoverTimeSec + 0.02) break;
+                    if (hoverTimeSec >= n.StartTimeSeconds &&
+                        hoverTimeSec <= n.EndTimeSeconds &&
+                        _score.Tracks[n.TrackIndex].IsVisibleOnRoll)
+                    {
+                        var (kx, kw) = PianoKeyboardControl.GetKeyHorizontalSpan(n.MidiPitch, w);
+                        if (pt.X >= kx && pt.X <= kx + kw)
+                            return n;
+                    }
+                }
+            }
+            return null;
         }
 
         private void UpdateScrubFromMouse(Point currentPoint)
@@ -206,13 +490,14 @@ namespace WinMusicXmlPlayer.Controls
             if (w <= 10 || h <= 10) return;
 
             bool isDark = ThemeManager.IsDarkMode;
-            dc.DrawRectangle(new SolidColorBrush(ThemeManager.CurrentRollBgColor), null, new Rect(0, 0, w, h));
-
             double dpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+            EnsureThemeBrushesUpdated();
+            EnsureStaticTextsCached(dpi, isDark);
+            dc.DrawRectangle(_rollBgBrush, null, new Rect(0, 0, w, h));
 
             if (_score == null || _score.Notes.Count == 0)
             {
-                DrawEmptyState(dc, w, h, dpi, isDark);
+                DrawEmptyState(dc, w, h);
                 return;
             }
 
@@ -228,6 +513,10 @@ namespace WinMusicXmlPlayer.Controls
             if (_isDraggingTime)
             {
                 DrawScrubOverlayBanner(dc, w, dpi, isDark);
+            }
+            else if (_hoveredNote != null)
+            {
+                DrawHoveredNoteInfoBadge(dc, w, dpi, isDark, _hoveredNote);
             }
         }
 
@@ -260,10 +549,8 @@ namespace WinMusicXmlPlayer.Controls
             double viewStartSec = _currentTimeSec - (_visibleWindowSeconds * playheadRatio);
             double viewEndSec = viewStartSec + _visibleWindowSeconds;
 
-            Brush blackLaneBrush = new SolidColorBrush(ThemeManager.CurrentRollBlackLaneColor);
-            Brush rulerLabelBrush = isDark
-                ? new SolidColorBrush(Color.FromRgb(203, 213, 225))
-                : new SolidColorBrush(Color.FromRgb(51, 65, 85));
+            Brush blackLaneBrush = _blackLaneBrush;
+            Brush rulerLabelBrush = isDark ? DarkRulerLabelBrush : LightRulerLabelBrush;
 
             // 1. 繪製音高橫列背景與八度線
             for (int p = minPitch; p <= maxPitch; p++)
@@ -284,13 +571,44 @@ namespace WinMusicXmlPlayer.Controls
                 }
             }
 
-            // 頂部時間尺背景
-            dc.DrawRectangle(new SolidColorBrush(ThemeManager.CurrentRollRulerColor), null, new Rect(0, 0, w, rulerH));
+            // 頂部時間尺背景與底部分隔線
+            dc.DrawRectangle(_rulerBrush, null, new Rect(0, 0, w, rulerH));
+            dc.DrawLine(MeasureLinePen, new Point(0, rollTop), new Point(w, rollTop));
 
             // 啟用卷軸畫布裁剪區
             dc.PushClip(new RectangleGeometry(new Rect(canvasLeft, 0, canvasW, h)));
 
-            // 2. 繪製小節線、拍線與小節編號
+            // 1B. 若有設定 A-B 循環點，繪製循環區間底色與標記線
+            if (_loopStartSec.HasValue)
+            {
+                double ax = playheadX + (_loopStartSec.Value - _currentTimeSec) * pxPerSec;
+                if (_loopEndSec.HasValue && _isLoopEnabled)
+                {
+                    double bx = playheadX + (_loopEndSec.Value - _currentTimeSec) * pxPerSec;
+                    double rx1 = Math.Max(canvasLeft, ax);
+                    double rx2 = Math.Min(w, bx);
+                    if (rx2 > rx1)
+                    {
+                        dc.DrawRectangle(LoopRegionFillBrush, null, new Rect(rx1, rollTop, rx2 - rx1, rollH));
+                    }
+                    if (bx >= canvasLeft && bx <= w)
+                    {
+                        dc.DrawLine(LoopBoundaryPen, new Point(bx, rollTop), new Point(bx, h));
+                        dc.DrawRoundedRectangle(LoopRulerBadgeBrush, null, new Rect(bx - 16, 4, 16, 18), 3, 3);
+                        var ftB = new FormattedText("B", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, UiTypeface, 10.5, Brushes.White, dpi);
+                        dc.DrawText(ftB, new Point(bx - 11, 5));
+                    }
+                }
+                if (ax >= canvasLeft && ax <= w)
+                {
+                    dc.DrawLine(LoopBoundaryPen, new Point(ax, rollTop), new Point(ax, h));
+                    dc.DrawRoundedRectangle(LoopRulerBadgeBrush, null, new Rect(ax, 4, 16, 18), 3, 3);
+                    var ftA = new FormattedText("A", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, UiTypeface, 10.5, Brushes.White, dpi);
+                    dc.DrawText(ftA, new Point(ax + 4, 5));
+                }
+            }
+
+            // 2. 繪製小節線、拍線與小節編號（垂直線僅繪製於 rollTop 以下，不劃入頂部小節列）
             var measures = _score.Measures;
             double lastLabelRightX = double.NegativeInfinity;
             for (int m = 0; m < measures.Count; m++)
@@ -302,7 +620,7 @@ namespace WinMusicXmlPlayer.Controls
                 double mx = playheadX + (meas.StartTimeSeconds - _currentTimeSec) * pxPerSec;
                 if (mx >= canvasLeft)
                 {
-                    dc.DrawLine(MeasureLinePen, new Point(mx, 0), new Point(mx, h));
+                    dc.DrawLine(MeasureLinePen, new Point(mx, rollTop), new Point(mx, h));
                 }
 
                 if (mx >= lastLabelRightX + 8)
@@ -352,7 +670,7 @@ namespace WinMusicXmlPlayer.Controls
             }
 
             var notes = _score.Notes;
-            int startIdx = FindFirstNoteIndexBefore(notes, viewStartSec);
+            int startIdx = _score.FindFirstNoteIndexForWindow(viewStartSec);
             for (int i = startIdx; i < notes.Count; i++)
             {
                 var n = notes[i];
@@ -380,53 +698,32 @@ namespace WinMusicXmlPlayer.Controls
                 double nh = Math.Max(3.5, rowH - 2.0);
 
                 Rect noteRect = new(nx1, ny, nw, nh);
-                Brush fillBrush = track.ThemeBrush;
-
-                if (!isAudible)
-                {
-                    var mutedColor = Color.FromArgb(65, track.ThemeColor.R, track.ThemeColor.G, track.ThemeColor.B);
-                    fillBrush = new SolidColorBrush(mutedColor);
-                }
+                Brush fillBrush = isAudible ? track.ThemeBrush : track.MutedThemeBrush;
 
                 dc.DrawRoundedRectangle(fillBrush, isActiveNow ? ActiveNoteBorderPen : null, noteRect, 2.5, 2.5);
             }
 
             dc.Pop();
 
-            // 4. 繪製左側音高標記欄 (C2 ~ C7)
-            dc.DrawRectangle(new SolidColorBrush(ThemeManager.CurrentRollRulerColor), null, new Rect(0, rollTop, leftPitchLabelW, rollH));
-            dc.DrawLine(MeasureLinePen, new Point(leftPitchLabelW, 0), new Point(leftPitchLabelW, h));
-
-            Brush accentBrush = new SolidColorBrush(ThemeManager.CurrentAccentColor);
-            Brush normalPitchBrush = isDark
-                ? new SolidColorBrush(Color.FromRgb(148, 163, 184))
-                : new SolidColorBrush(Color.FromRgb(71, 85, 105));
+            // 4. 繪製左側音高標記欄 (C2 ~ C7，使用快取 FormattedText；垂直分隔線只從 rollTop 畫到底部)
+            dc.DrawRectangle(_rulerBrush, null, new Rect(0, rollTop, leftPitchLabelW, rollH));
+            dc.DrawLine(MeasureLinePen, new Point(leftPitchLabelW, rollTop), new Point(leftPitchLabelW, h));
 
             for (int p = minPitch; p <= maxPitch; p++)
             {
                 if (p % 12 == 0 || p == minPitch || p == maxPitch)
                 {
                     double y = rollTop + (maxPitch - p) * rowH;
-                    var ft = new FormattedText(
-                        NoteEvent.GetPitchName(p),
-                        CultureInfo.InvariantCulture,
-                        FlowDirection.LeftToRight,
-                        UiTypeface,
-                        10.0,
-                        p == 60 ? accentBrush : normalPitchBrush,
-                        dpi);
+                    var ft = GetCachedPitchLabel(p, dpi, isDark);
                     dc.DrawText(ft, new Point(6, y + (rowH - ft.Height) * 0.5));
                 }
             }
 
-            // 5. 繪製播放時間線 (Playhead，與主題色彩連動)
-            Color accent = ThemeManager.CurrentAccentColor;
-            var playheadGlow = new SolidColorBrush(Color.FromArgb(46, accent.R, accent.G, accent.B));
-            var playheadPen = new Pen(new SolidColorBrush(accent), 2.4);
-            dc.DrawRectangle(playheadGlow, null, new Rect(playheadX - 8, rollTop, 16, rollH));
-            dc.DrawLine(playheadPen, new Point(playheadX, 0), new Point(playheadX, h));
+            // 5. 繪製播放時間線 (Playhead，垂直線從 rollTop 開始，不穿過頂部小節列)
+            dc.DrawRectangle(_playheadGlowBrush, null, new Rect(playheadX - 8, rollTop, 16, rollH));
+            dc.DrawLine(_playheadPen, new Point(playheadX, rollTop), new Point(playheadX, h));
 
-            DrawBottomLeftHintBadge(dc, canvasLeft + 10, h - 32, dpi, isDark);
+            DrawBottomLeftHintBadge(dc, canvasLeft + 10, h - 32, isDark);
         }
 
         private void RenderVerticalFalling(DrawingContext dc, double w, double h, double dpi, bool isDark)
@@ -438,10 +735,8 @@ namespace WinMusicXmlPlayer.Controls
             double viewStartSec = _currentTimeSec;
             double viewEndSec = _currentTimeSec + lookaheadSec;
 
-            Brush blackLaneBrush = new SolidColorBrush(ThemeManager.CurrentRollBlackLaneColor);
-            Brush measureTextBrush = isDark
-                ? new SolidColorBrush(Color.FromRgb(203, 213, 225))
-                : new SolidColorBrush(Color.FromRgb(51, 65, 85));
+            Brush blackLaneBrush = _blackLaneBrush;
+            Brush measureTextBrush = isDark ? DarkRulerLabelBrush : LightRulerLabelBrush;
 
             // 1. 繪製對齊下方 88 鍵的垂直音軌格線
             for (int m = PianoKeyboardControl.FirstMidiNote; m <= PianoKeyboardControl.LastMidiNote; m++)
@@ -491,7 +786,7 @@ namespace WinMusicXmlPlayer.Controls
             }
 
             var notes = _score.Notes;
-            int startIdx = FindFirstNoteIndexBefore(notes, viewStartSec);
+            int startIdx = _score.FindFirstNoteIndexForWindow(viewStartSec);
             for (int i = startIdx; i < notes.Count; i++)
             {
                 var n = notes[i];
@@ -517,37 +812,25 @@ namespace WinMusicXmlPlayer.Controls
                 double nh = Math.Max(3.5, spanPx - gapPx);
                 Rect noteRect = new(kx + 1.0, yTop + gapPx, Math.Max(3.0, kw - 2.0), nh);
 
-                Brush fillBrush = track.ThemeBrush;
-                if (!isAudible)
-                {
-                    var mutedColor = Color.FromArgb(65, track.ThemeColor.R, track.ThemeColor.G, track.ThemeColor.B);
-                    fillBrush = new SolidColorBrush(mutedColor);
-                }
+                Brush fillBrush = isAudible ? track.ThemeBrush : track.MutedThemeBrush;
 
                 dc.DrawRoundedRectangle(fillBrush, isActiveNow ? ActiveNoteBorderPen : null, noteRect, 3.0, 3.0);
             }
 
             // 底部觸鍵光暈線 (與主題色彩連動)
-            var playheadPen = new Pen(new SolidColorBrush(ThemeManager.CurrentAccentColor), 2.4);
-            dc.DrawLine(playheadPen, new Point(0, h - 1), new Point(w, h - 1));
+            dc.DrawLine(_playheadPen, new Point(0, h - 1), new Point(w, h - 1));
 
-            DrawBottomLeftHintBadge(dc, 12, h - 32, dpi, isDark);
+            DrawBottomLeftHintBadge(dc, 12, h - 32, isDark);
         }
 
-        private static void DrawBottomLeftHintBadge(DrawingContext dc, double x, double y, double dpi, bool isDark)
+        private void DrawBottomLeftHintBadge(DrawingContext dc, double x, double y, bool isDark)
         {
-            var hintFt = new FormattedText(
-                "⇄ 按住滑鼠左鍵左右滑動調整時間 · 滾輪縮放視野",
-                CultureInfo.InvariantCulture,
-                FlowDirection.LeftToRight,
-                UiTypeface,
-                11.0,
-                isDark ? new SolidColorBrush(Color.FromRgb(203, 213, 225)) : new SolidColorBrush(Color.FromRgb(51, 65, 85)),
-                dpi);
+            var hintFt = _cachedHintFt;
+            if (hintFt == null) return;
 
             dc.DrawRoundedRectangle(
-                isDark ? new SolidColorBrush(Color.FromArgb(195, 15, 23, 42)) : new SolidColorBrush(Color.FromArgb(225, 255, 255, 255)),
-                new Pen(isDark ? new SolidColorBrush(Color.FromRgb(51, 65, 85)) : new SolidColorBrush(Color.FromRgb(203, 213, 225)), 1.0),
+                isDark ? DarkHintBgBrush : LightHintBgBrush,
+                isDark ? DarkHintBorderPen : LightHintBorderPen,
                 new Rect(x, y, hintFt.Width + 16, hintFt.Height + 6),
                 5, 5);
             dc.DrawText(hintFt, new Point(x + 8, y + 3));
@@ -557,14 +840,7 @@ namespace WinMusicXmlPlayer.Controls
         {
             if (_score == null) return;
 
-            int measNum = 1;
-            foreach (var m in _score.Measures)
-            {
-                if (m.StartTimeSeconds <= _currentTimeSec)
-                    measNum = m.NumericMeasureNumber;
-                else
-                    break;
-            }
+            int measNum = _score.FindMeasureAt(_currentTimeSec).NumericMeasureNumber;
 
             TimeSpan ts = TimeSpan.FromSeconds(_currentTimeSec);
             string text = $"◀ 滑鼠調整時間位置：{ts:mm\\:ss\\.f}  (第 {measNum} 小節) ▶";
@@ -575,7 +851,7 @@ namespace WinMusicXmlPlayer.Controls
                 FlowDirection.LeftToRight,
                 UiTypeface,
                 13.5,
-                isDark ? Brushes.White : new SolidColorBrush(Color.FromRgb(15, 23, 42)),
+                isDark ? Brushes.White : LightRulerLabelBrush,
                 dpi);
 
             double bw = ft.Width + 28;
@@ -584,44 +860,60 @@ namespace WinMusicXmlPlayer.Controls
             double by = 36;
 
             dc.DrawRoundedRectangle(
-                isDark ? new SolidColorBrush(Color.FromArgb(225, 15, 23, 42)) : new SolidColorBrush(Color.FromArgb(240, 255, 255, 255)),
-                new Pen(new SolidColorBrush(ThemeManager.CurrentAccentColor), 1.5),
+                isDark ? DarkHintBgBrush : LightHintBgBrush,
+                _scrubBannerBorderPen,
                 new Rect(bx, by, bw, bh),
                 8, 8);
             dc.DrawText(ft, new Point(bx + 14, by + 7));
         }
 
-        private static void DrawEmptyState(DrawingContext dc, double w, double h, double dpi, bool isDark)
+        private void DrawHoveredNoteInfoBadge(DrawingContext dc, double w, double dpi, bool isDark, NoteEvent note)
         {
+            if (_score == null || note.TrackIndex < 0 || note.TrackIndex >= _score.Tracks.Count)
+                return;
+
+            var tr = _score.Tracks[note.TrackIndex];
+            string dynSym = note.Velocity switch
+            {
+                < 42 => "ppp",
+                < 54 => "pp",
+                < 66 => "p",
+                < 78 => "mp",
+                < 90 => "mf",
+                < 104 => "f",
+                < 116 => "ff",
+                _ => "fff"
+            };
+            string artPart = string.IsNullOrWhiteSpace(note.ArticulationLabel) ? "" : $"  ｜  奏法：{note.ArticulationLabel}";
+            string info = $"🎵 {tr.Name}  ｜  音高：{note.PitchName} (MIDI {note.MidiPitch})  ｜  第 {note.MeasureNumber} 小節  ｜  力度：{note.Velocity} ({dynSym}){artPart}";
+
             var ft = new FormattedText(
-                "請點擊左上角「開啟 MusicXML」或將樂譜檔案拖曳至此視窗開始播放",
+                info,
                 CultureInfo.InvariantCulture,
                 FlowDirection.LeftToRight,
                 UiTypeface,
-                15.0,
-                isDark ? new SolidColorBrush(Color.FromRgb(148, 163, 184)) : new SolidColorBrush(Color.FromRgb(100, 116, 139)),
+                11.5,
+                isDark ? Brushes.White : LightRulerLabelBrush,
                 dpi);
-            dc.DrawText(ft, new Point((w - ft.Width) * 0.5, (h - ft.Height) * 0.5));
+
+            double bw = ft.Width + 24;
+            double bh = ft.Height + 10;
+            double bx = Math.Max(52, w - bw - 14);
+            double by = _viewMode == PianoRollViewMode.HorizontalTimeline ? 34 : 10;
+
+            dc.DrawRoundedRectangle(
+                isDark ? DarkHintBgBrush : LightHintBgBrush,
+                new Pen(tr.ThemeBrush, 1.5),
+                new Rect(bx, by, bw, bh),
+                6, 6);
+            dc.DrawText(ft, new Point(bx + 12, by + 5));
         }
 
-        private static int FindFirstNoteIndexBefore(List<NoteEvent> notes, double targetSec)
+        private void DrawEmptyState(DrawingContext dc, double w, double h)
         {
-            int lo = 0, hi = notes.Count - 1;
-            int idx = 0;
-            while (lo <= hi)
-            {
-                int mid = (lo + hi) >> 1;
-                if (notes[mid].StartTimeSeconds <= targetSec)
-                {
-                    idx = mid;
-                    lo = mid + 1;
-                }
-                else
-                {
-                    hi = mid - 1;
-                }
-            }
-            return Math.Max(0, idx - 300);
+            var ft = _cachedEmptyFt;
+            if (ft == null) return;
+            dc.DrawText(ft, new Point((w - ft.Width) * 0.5, (h - ft.Height) * 0.5));
         }
     }
 }

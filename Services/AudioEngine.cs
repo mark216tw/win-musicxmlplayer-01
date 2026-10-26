@@ -47,17 +47,30 @@ namespace WinMusicXmlPlayer.Services
         private double _playbackSpeed = 1.0;
         private double _masterVolume = 1.25;
 
+        // A-B 區間循環狀態
+        private double? _loopStartSec;
+        private double? _loopEndSec;
+        private bool _isLoopEnabled;
+
         // Interleaved Render 緩衝區 (通用合成器 + 鋼琴專用合成器混音緩衝)
         private readonly float[] _blockLeft = new float[64];
         private readonly float[] _blockRight = new float[64];
         private readonly float[] _pianoLeft = new float[64];
         private readonly float[] _pianoRight = new float[64];
 
+        // 紀錄各 MIDI Channel 已套用的 (Bank, Patch)，避免每次音量或靜音變動都重送 Program Change (0xC0)
+        private readonly (int bank, int patch)[] _appliedGeneralPresets = new (int, int)[16];
+        private readonly (int bank, int patch)[] _appliedPianoPresets = new (int, int)[16];
+
         public WaveFormat WaveFormat => _waveFormat;
 
         public bool IsPlaying => _isPlaying;
         public double CurrentTimeSeconds => _currentTimeSec;
         public double TotalDurationSeconds => _score?.TotalDurationSeconds ?? 0.0;
+
+        public double? LoopStartSeconds => _loopStartSec;
+        public double? LoopEndSeconds => _loopEndSec;
+        public bool IsLoopEnabled => _isLoopEnabled;
 
         public string CurrentSoundFontPath => _currentSoundFontPath;
         public string CurrentSoundFontName => string.IsNullOrEmpty(_currentSoundFontPath) ? "未載入音源" : Path.GetFileName(_currentSoundFontPath);
@@ -93,6 +106,13 @@ namespace WinMusicXmlPlayer.Services
         public AudioEngine()
         {
             _waveFormat = WaveFormat.CreateIeeeFloatWaveFormat(_sampleRate, 2);
+            ResetAppliedPresetCacheLocked();
+        }
+
+        private void ResetAppliedPresetCacheLocked()
+        {
+            Array.Fill(_appliedGeneralPresets, (-1, -1));
+            Array.Fill(_appliedPianoPresets, (-1, -1));
         }
 
         public string GetStatusSummaryText()
@@ -134,6 +154,7 @@ namespace WinMusicXmlPlayer.Services
                     _soundFont = newSf;
                     _synth = newSynth;
                     _currentSoundFontPath = sf2Path;
+                    Array.Fill(_appliedGeneralPresets, (-1, -1));
                     ApplyTrackProgramsAndControllersLocked();
                 }
 
@@ -177,6 +198,7 @@ namespace WinMusicXmlPlayer.Services
                     _pianoSoundFont = newSf;
                     _pianoSynth = newSynth;
                     _pianoSoundFontPath = sf2Path;
+                    Array.Fill(_appliedPianoPresets, (-1, -1));
                     ApplyTrackProgramsAndControllersLocked();
                 }
 
@@ -200,6 +222,7 @@ namespace WinMusicXmlPlayer.Services
                 _pianoSoundFont = null;
                 _pianoSynth = null;
                 _pianoSoundFontPath = string.Empty;
+                Array.Fill(_appliedPianoPresets, (-1, -1));
                 ApplyTrackProgramsAndControllersLocked();
             }
         }
@@ -282,8 +305,128 @@ namespace WinMusicXmlPlayer.Services
                 _notes = score.Notes;
                 _currentTimeSec = 0.0;
                 _nextNoteIndex = 0;
+                _loopStartSec = null;
+                _loopEndSec = null;
+                _isLoopEnabled = false;
 
+                ResetAppliedPresetCacheLocked();
                 ApplyTrackProgramsAndControllersLocked();
+            }
+        }
+
+        public void SetLoopPointA(double timeSec)
+        {
+            lock (_syncLock)
+            {
+                double maxDur = _score?.TotalDurationSeconds ?? 0.0;
+                _loopStartSec = Math.Clamp(timeSec, 0.0, maxDur);
+                _loopEndSec = null;
+                _isLoopEnabled = false;
+            }
+        }
+
+        public void SetLoopPointB(double timeSec)
+        {
+            lock (_syncLock)
+            {
+                if (!_loopStartSec.HasValue)
+                {
+                    SetLoopPointA(timeSec);
+                    return;
+                }
+
+                double maxDur = _score?.TotalDurationSeconds ?? 0.0;
+                double b = Math.Clamp(timeSec, 0.0, maxDur);
+                double a = _loopStartSec.Value;
+                if (b < a)
+                {
+                    (a, b) = (b, a);
+                }
+
+                if (b - a >= 0.2)
+                {
+                    _loopStartSec = a;
+                    _loopEndSec = b;
+                    _isLoopEnabled = true;
+                }
+            }
+        }
+
+        public void ClearLoop()
+        {
+            lock (_syncLock)
+            {
+                _loopStartSec = null;
+                _loopEndSec = null;
+                _isLoopEnabled = false;
+            }
+        }
+
+        /// <summary>
+        /// 供下方 88 鍵鋼琴鍵盤滑鼠點擊或滑過時即時試聽單音
+        /// </summary>
+        public void PreviewNoteOn(int midiPitch, int velocity = 96)
+        {
+            EnsureWavePlayerInitialized();
+            lock (_syncLock)
+            {
+                var targetSynth = _pianoSynth ?? _synth;
+                if (targetSynth == null) return;
+
+                int pitch = Math.Clamp(midiPitch, 21, 108);
+                if (_score == null || _score.Tracks.Count == 0)
+                {
+                    var sf = _pianoSynth != null ? _pianoSoundFont : _soundFont;
+                    var (bank, patch) = ResolvePresetForSoundFont(sf, 0);
+                    targetSynth.ProcessMidiMessage(0, 0xB0, 0x00, bank);
+                    targetSynth.ProcessMidiMessage(0, 0xB0, 0x20, 0);
+                    targetSynth.ProcessMidiMessage(0, 0xC0, patch, 0);
+                    targetSynth.ProcessMidiMessage(0, 0xB0, 7, 115);
+                }
+
+                targetSynth.NoteOff(0, pitch);
+                targetSynth.NoteOn(0, pitch, Math.Clamp(velocity, 1, 127));
+            }
+        }
+
+        public void PreviewNoteOff(int midiPitch)
+        {
+            lock (_syncLock)
+            {
+                int pitch = Math.Clamp(midiPitch, 21, 108);
+                _pianoSynth?.NoteOff(0, pitch);
+                _synth?.NoteOff(0, pitch);
+            }
+        }
+
+        /// <summary>
+        /// 僅更新各聲部音量 CC7，避免拖拉音量滑桿時重刷全部 Program Change 與爭搶合成器狀態
+        /// </summary>
+        public void UpdateTrackVolumesOnly()
+        {
+            lock (_syncLock)
+            {
+                if (_score == null) return;
+
+                foreach (var track in _score.Tracks)
+                {
+                    int ch = Math.Clamp(track.MidiChannel, 0, 15);
+                    int ccVol = (int)Math.Clamp(Math.Round(115.0 * track.Volume), 0, 127);
+                    _synth?.ProcessMidiMessage(ch, 0xB0, 7, ccVol);
+                    _pianoSynth?.ProcessMidiMessage(ch, 0xB0, 7, ccVol);
+                }
+
+                for (int i = _activeNotes.Count - 1; i >= 0; i--)
+                {
+                    var an = _activeNotes[i];
+                    if (an.TrackIndex >= 0 && an.TrackIndex < _score.Tracks.Count &&
+                        _score.Tracks[an.TrackIndex].Volume <= 0.001)
+                    {
+                        var targetSynth = an.IsPianoSynth ? _pianoSynth : _synth;
+                        targetSynth?.NoteOff(an.Channel, an.Pitch);
+                        _activeNotes.RemoveAt(i);
+                    }
+                }
             }
         }
 
@@ -326,27 +469,35 @@ namespace WinMusicXmlPlayer.Services
 
                 if (_synth != null)
                 {
-                    var (bank, patch) = ResolvePresetForSoundFont(_soundFont, track.GmProgram);
-                    _synth.ProcessMidiMessage(ch, 0xB0, 0x00, bank);
-                    _synth.ProcessMidiMessage(ch, 0xB0, 0x20, 0);
-                    _synth.ProcessMidiMessage(ch, 0xC0, patch, 0);
+                    var preset = ResolvePresetForSoundFont(_soundFont, track.GmProgram);
+                    if (_appliedGeneralPresets[ch] != preset)
+                    {
+                        _appliedGeneralPresets[ch] = preset;
+                        _synth.ProcessMidiMessage(ch, 0xB0, 0x00, preset.bank);
+                        _synth.ProcessMidiMessage(ch, 0xB0, 0x20, 0);
+                        _synth.ProcessMidiMessage(ch, 0xC0, preset.patch, 0);
+                        _synth.ProcessMidiMessage(ch, 0xB0, 11, 127);
+                        _synth.ProcessMidiMessage(ch, 0xB0, 91, 52);
+                        _synth.ProcessMidiMessage(ch, 0xB0, 93, 18);
+                    }
                     _synth.ProcessMidiMessage(ch, 0xB0, 10, Math.Clamp(track.Pan, 0, 127));
-                    _synth.ProcessMidiMessage(ch, 0xB0, 11, 127);
-                    _synth.ProcessMidiMessage(ch, 0xB0, 91, 52);
-                    _synth.ProcessMidiMessage(ch, 0xB0, 93, 18);
                     _synth.ProcessMidiMessage(ch, 0xB0, 7, ccVol);
                 }
 
                 if (_pianoSynth != null)
                 {
-                    var (pBank, pPatch) = ResolvePresetForSoundFont(_pianoSoundFont, track.GmProgram);
-                    _pianoSynth.ProcessMidiMessage(ch, 0xB0, 0x00, pBank);
-                    _pianoSynth.ProcessMidiMessage(ch, 0xB0, 0x20, 0);
-                    _pianoSynth.ProcessMidiMessage(ch, 0xC0, pPatch, 0);
+                    var pPreset = ResolvePresetForSoundFont(_pianoSoundFont, track.GmProgram);
+                    if (_appliedPianoPresets[ch] != pPreset)
+                    {
+                        _appliedPianoPresets[ch] = pPreset;
+                        _pianoSynth.ProcessMidiMessage(ch, 0xB0, 0x00, pPreset.bank);
+                        _pianoSynth.ProcessMidiMessage(ch, 0xB0, 0x20, 0);
+                        _pianoSynth.ProcessMidiMessage(ch, 0xC0, pPreset.patch, 0);
+                        _pianoSynth.ProcessMidiMessage(ch, 0xB0, 11, 127);
+                        _pianoSynth.ProcessMidiMessage(ch, 0xB0, 91, 52);
+                        _pianoSynth.ProcessMidiMessage(ch, 0xB0, 93, 18);
+                    }
                     _pianoSynth.ProcessMidiMessage(ch, 0xB0, 10, Math.Clamp(track.Pan, 0, 127));
-                    _pianoSynth.ProcessMidiMessage(ch, 0xB0, 11, 127);
-                    _pianoSynth.ProcessMidiMessage(ch, 0xB0, 91, 52);
-                    _pianoSynth.ProcessMidiMessage(ch, 0xB0, 93, 18);
                     _pianoSynth.ProcessMidiMessage(ch, 0xB0, 7, ccVol);
                 }
             }
@@ -456,6 +607,15 @@ namespace WinMusicXmlPlayer.Services
                         double deltaSec = (blockFrames / (double)_sampleRate) * _playbackSpeed;
                         double blockEndTime = _currentTimeSec + deltaSec;
 
+                        // A-B 區間循環檢查：到達 B 點時無縫跳回 A 點
+                        if (_isLoopEnabled && _loopStartSec.HasValue && _loopEndSec.HasValue &&
+                            _loopEndSec.Value > _loopStartSec.Value + 0.15 &&
+                            blockEndTime >= _loopEndSec.Value)
+                        {
+                            SeekInternalLocked(_loopStartSec.Value);
+                            blockEndTime = _currentTimeSec + deltaSec;
+                        }
+
                         // 1. 處理到期應關閉的音符 (NoteOff)
                         for (int i = _activeNotes.Count - 1; i >= 0; i--)
                         {
@@ -553,8 +713,8 @@ namespace WinMusicXmlPlayer.Services
 
                     for (int f = 0; f < blockFrames; f++)
                     {
-                        buffer[outIndex++] = _blockLeft[f];
-                        buffer[outIndex++] = _blockRight[f];
+                        buffer[outIndex++] = SoftClip(_blockLeft[f]);
+                        buffer[outIndex++] = SoftClip(_blockRight[f]);
                     }
 
                     framesRemaining -= blockFrames;
@@ -567,6 +727,120 @@ namespace WinMusicXmlPlayer.Services
             }
 
             return count;
+        }
+
+        /// <summary>
+        /// 無分支平滑軟限幅 (Soft Clipper)：線性區間 [-0.92, 0.92] 零失真，超過時平滑漸近至 [-1.0, 1.0] 防止 WASAPI 破音
+        /// </summary>
+        private static float SoftClip(float x)
+        {
+            const float threshold = 0.92f;
+            float abs = MathF.Abs(x);
+            if (abs <= threshold)
+                return x;
+
+            float excess = abs - threshold;
+            float compressed = threshold + (1.0f - threshold) * (excess / (excess + (1.0f - threshold)));
+            return x >= 0f ? compressed : -compressed;
+        }
+
+        /// <summary>
+        /// 使用獨立合成器實例將目前樂譜以離線極速 (~50x 即時速度) 渲染並匯出為 16-bit 44.1kHz 立體聲 WAV 檔案
+        /// </summary>
+        public bool ExportToWavFile(string outputWavPath, out string errorMessage)
+        {
+            errorMessage = string.Empty;
+            MusicScore? scoreSnap;
+            SoundFont? generalSfSnap;
+            SoundFont? pianoSfSnap;
+            double speedSnap;
+            double masterVolSnap;
+
+            lock (_syncLock)
+            {
+                scoreSnap = _score;
+                generalSfSnap = _soundFont;
+                pianoSfSnap = _pianoSoundFont;
+                speedSnap = _playbackSpeed;
+                masterVolSnap = _masterVolume;
+            }
+
+            if (scoreSnap == null || scoreSnap.Notes.Count == 0)
+            {
+                errorMessage = "目前尚未載入任何樂譜。";
+                return false;
+            }
+
+            if (generalSfSnap == null && pianoSfSnap == null)
+            {
+                errorMessage = "尚未載入任何 .sf2 音源檔。";
+                return false;
+            }
+
+            try
+            {
+                using var offlineEngine = new AudioEngine
+                {
+                    PlaybackSpeed = speedSnap,
+                    MasterVolume = masterVolSnap
+                };
+
+                var settings = new SynthesizerSettings(_sampleRate)
+                {
+                    EnableReverbAndChorus = true,
+                    MaximumPolyphony = 128
+                };
+
+                if (generalSfSnap != null)
+                {
+                    offlineEngine._soundFont = generalSfSnap;
+                    offlineEngine._synth = new Synthesizer(generalSfSnap, settings)
+                    {
+                        MasterVolume = (float)(1.05 * masterVolSnap)
+                    };
+                }
+
+                if (pianoSfSnap != null)
+                {
+                    offlineEngine._pianoSoundFont = pianoSfSnap;
+                    offlineEngine._pianoSynth = new Synthesizer(pianoSfSnap, settings)
+                    {
+                        MasterVolume = (float)(1.05 * masterVolSnap)
+                    };
+                    offlineEngine._pianoSoundFontPath = _pianoSoundFontPath;
+                }
+
+                offlineEngine.LoadScore(scoreSnap);
+                offlineEngine._isPlaying = true;
+
+                using var writer = new WaveFileWriter(outputWavPath, new WaveFormat(_sampleRate, 16, 2));
+                float[] renderBuf = new float[4096];
+                short[] pcm16Buf = new short[4096];
+                byte[] byteBuf = new byte[4096 * 2];
+
+                int maxFrames = (int)Math.Ceiling(((scoreSnap.TotalDurationSeconds / speedSnap) + 2.5) * _sampleRate);
+                int framesWritten = 0;
+
+                while (offlineEngine.IsPlaying && framesWritten < maxFrames)
+                {
+                    int readSamples = offlineEngine.Read(renderBuf, 0, renderBuf.Length);
+                    for (int i = 0; i < readSamples; i++)
+                    {
+                        float clamped = Math.Clamp(renderBuf[i], -1.0f, 1.0f);
+                        pcm16Buf[i] = (short)Math.Round(clamped * 32767f);
+                    }
+                    Buffer.BlockCopy(pcm16Buf, 0, byteBuf, 0, readSamples * 2);
+                    writer.Write(byteBuf, 0, readSamples * 2);
+                    framesWritten += readSamples / 2;
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                errorMessage = ex.Message;
+                return false;
+            }
         }
 
         public void Dispose()

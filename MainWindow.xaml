@@ -45,9 +45,24 @@
                                     CornerRadius="4"
                                     Padding="10,4"
                                     Margin="2,1">
-                                <ContentPresenter ContentSource="Header"
-                                                  RecognizesAccessKey="True"
-                                                  VerticalAlignment="Center"/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <ContentPresenter Grid.Column="0"
+                                                      ContentSource="Header"
+                                                      RecognizesAccessKey="True"
+                                                      VerticalAlignment="Center"/>
+                                    <TextBlock x:Name="SubmenuArrow"
+                                               Grid.Column="1"
+                                               Text="▸"
+                                               FontSize="11"
+                                               Foreground="{DynamicResource TextMutedBrush}"
+                                               VerticalAlignment="Center"
+                                               Margin="12,0,0,0"
+                                               Visibility="Collapsed"/>
+                                </Grid>
                             </Border>
 
                             <Popup x:Name="PART_Popup"
@@ -75,6 +90,14 @@
                             <Trigger Property="Role" Value="SubmenuItem">
                                 <Setter TargetName="Border" Property="Padding" Value="14,6"/>
                                 <Setter TargetName="PART_Popup" Property="Placement" Value="Right"/>
+                            </Trigger>
+                            <Trigger Property="Role" Value="SubmenuHeader">
+                                <Setter TargetName="Border" Property="Padding" Value="14,6"/>
+                                <Setter TargetName="PART_Popup" Property="Placement" Value="Right"/>
+                                <Setter TargetName="SubmenuArrow" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}"/>
                             </Trigger>
                             <Trigger Property="IsHighlighted" Value="True">
                                 <Setter TargetName="Border" Property="Background" Value="{DynamicResource AccentSoftBgBrush}"/>
@@ -183,6 +206,15 @@
                     <MenuItem Header="開啟 MusicXML (Ctrl+O)"
                               Style="{StaticResource SystemMenuItemStyle}"
                               Click="BtnOpenFile_Click"/>
+                    <MenuItem x:Name="MenuRecentFiles"
+                              Header="最近開啟的樂譜"
+                              Style="{StaticResource SystemMenuItemStyle}"/>
+                    <MenuItem Header="跳轉至指定小節 (Ctrl+G)"
+                              Style="{StaticResource SystemMenuItemStyle}"
+                              Click="MenuGotoMeasure_Click"/>
+                    <MenuItem Header="匯出 WAV 音訊檔 (Ctrl+E)"
+                              Style="{StaticResource SystemMenuItemStyle}"
+                              Click="MenuExportWav_Click"/>
                     <Separator Style="{StaticResource SystemMenuSeparatorStyle}"/>
                     <MenuItem Header="離開 (Ctrl+Q)"
                               Style="{StaticResource SystemMenuItemStyle}"
@@ -194,7 +226,7 @@
                           Style="{StaticResource SystemMenuItemStyle}"
                           PreviewMouseLeftButtonDown="TopMenuItem_PreviewMouseLeftButtonDown"
                           MouseEnter="TopMenuItem_MouseEnter">
-                    <MenuItem Header="音源設定與下載建議 (Ctrl+M)"
+                    <MenuItem Header="音源設定 (Ctrl+M)"
                               Style="{StaticResource SystemMenuItemStyle}"
                               Click="MenuSoundFontSettings_Click"/>
                     <Separator Style="{StaticResource SystemMenuSeparatorStyle}"/>
@@ -442,10 +474,14 @@
                                                 <Slider Grid.Column="1"
                                                         Minimum="0.0"
                                                         Maximum="1.5"
+                                                        TickFrequency="0.05"
+                                                        IsSnapToTickEnabled="True"
                                                         SmallChange="0.05"
-                                                        LargeChange="0.1"
+                                                        LargeChange="0.05"
                                                         Value="{Binding Volume, Mode=TwoWay}"
                                                         ValueChanged="TrackVolume_ValueChanged"
+                                                        MouseDoubleClick="TrackVolumeSlider_MouseDoubleClick"
+                                                        ToolTip="以 5% 為單位調整（雙擊恢復 100%）"
                                                         VerticalAlignment="Center"/>
 
                                                 <TextBlock Grid.Column="2"
@@ -698,13 +734,44 @@
                                 Padding="9,5"
                                 FontSize="12"
                                 Content="⏩ +5s"
-                                Click="BtnStepForward_Click"/>
+                                Click="BtnStepForward_Click"
+                                Margin="0,0,5,0"/>
+
+                        <Button x:Name="BtnLoopAB"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                Padding="9,5"
+                                FontSize="12"
+                                Content="🔁 A-B 循環"
+                                Click="BtnLoopAB_Click"
+                                ToolTip="點擊依序設定 A 點 → B 點 → 清除循環（亦可在卷軸上按滑鼠右鍵設定）"/>
                     </StackPanel>
 
                     <!-- 中央：即時小節、拍號、調號與速度資訊 -->
                     <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
-                        <Border Background="{DynamicResource BgBadgeBrush}" BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1" CornerRadius="{DynamicResource BadgeCornerRadius}" Padding="8,4" Margin="3,0">
-                            <TextBlock x:Name="TxtMeasureStatus" Text="小節：1 / 1" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimaryBrush}"/>
+                        <Border Background="{DynamicResource BgBadgeBrush}"
+                                BorderBrush="{DynamicResource BorderSubtleBrush}"
+                                BorderThickness="1"
+                                CornerRadius="{DynamicResource BadgeCornerRadius}"
+                                Padding="8,4"
+                                Margin="3,0"
+                                Cursor="Hand"
+                                MouseLeftButtonDown="MeasureBadge_MouseLeftButtonDown"
+                                ToolTip="點擊或按 Ctrl+G 輸入小節號直接跳轉">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <TextBlock x:Name="TxtMeasureStatus" Text="小節：1 / 1" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center"/>
+                                <TextBox x:Name="TxtGotoMeasureInput"
+                                         Width="54"
+                                         FontSize="12"
+                                         Padding="3,0"
+                                         Margin="4,0,0,0"
+                                         Visibility="Collapsed"
+                                         Background="{DynamicResource BgCardBrush}"
+                                         Foreground="{DynamicResource TextPrimaryBrush}"
+                                         BorderBrush="{DynamicResource AccentBlueBrush}"
+                                         BorderThickness="1"
+                                         KeyDown="TxtGotoMeasureInput_KeyDown"
+                                         LostFocus="TxtGotoMeasureInput_LostFocus"/>
+                            </StackPanel>
                         </Border>
                         <Border Background="{DynamicResource BgBadgeBrush}" BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1" CornerRadius="{DynamicResource BadgeCornerRadius}" Padding="8,4" Margin="3,0">
                             <TextBlock x:Name="TxtTimeSigStatus" Text="拍號：4/4" FontSize="12" Foreground="{DynamicResource TextMutedBrush}"/>
@@ -727,6 +794,8 @@
                                 Value="1.0"
                                 TickFrequency="0.25"
                                 ValueChanged="SliderSpeed_ValueChanged"
+                                MouseDoubleClick="BtnResetSpeed_Click"
+                                ToolTip="拖曳調整播放倍速（雙擊恢復 1.00x）"
                                 VerticalAlignment="Center"/>
                         <TextBlock x:Name="TxtSpeedValue"
                                    Text="1.00x"
@@ -743,13 +812,27 @@
                                 Click="BtnResetSpeed_Click"
                                 Margin="0,0,10,0"/>
 
-                        <TextBlock Text="主音量：" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="12" VerticalAlignment="Center" Margin="0,0,3,0"/>
+                        <TextBlock x:Name="TxtMasterVolumeLabel"
+                                   Text="🔊 主音量："
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   FontSize="12"
+                                   VerticalAlignment="Center"
+                                   Margin="0,0,3,0"
+                                   Cursor="Hand"
+                                   MouseLeftButtonDown="TxtMasterVolumeLabel_MouseLeftButtonDown"
+                                   ToolTip="點擊切換靜音 (快捷鍵 M)"/>
                         <Slider x:Name="SliderMasterVolume"
                                 Width="72"
                                 Minimum="0.0"
                                 Maximum="2.0"
                                 Value="1.25"
+                                TickFrequency="0.05"
+                                IsSnapToTickEnabled="True"
+                                SmallChange="0.05"
+                                LargeChange="0.05"
                                 ValueChanged="SliderMasterVolume_ValueChanged"
+                                MouseDoubleClick="SliderMasterVolume_MouseDoubleClick"
+                                ToolTip="以 5% 為單位調整（雙擊恢復 100%）"
                                 VerticalAlignment="Center"/>
                         <TextBlock x:Name="TxtMasterVolume"
                                    Text="125%"

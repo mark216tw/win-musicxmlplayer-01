@@ -23,6 +23,14 @@ namespace WinMusicXmlPlayer
         private string? _currentFilePath;
         private bool _isSliderDragging;
         private bool _wasPlayingBeforeScrub;
+        private double _lastRenderedTimeSec = -1.0;
+        private int _lastDisplayedTenths = -1;
+        private int _lastTelemetryTimelineIdx = -1;
+        private int _lastTelemetrySpeedBpm = -1;
+        private bool _metersActive;
+        private bool _isMasterMuted;
+        private double _masterVolumeBeforeMute = 1.25;
+        private int _loopState;
         private DispatcherTimer? _toastTimer;
 
         public List<GmInstrumentItem> GmInstrumentList => SoundFontManager.GmInstruments;
@@ -35,10 +43,15 @@ namespace WinMusicXmlPlayer
             FitWindowToWorkArea();
             DataContext = this;
 
-            // 綁定鋼琴卷軸滑鼠左右滑動調整時間事件
+            // 綁定鋼琴卷軸滑鼠左右滑動調整時間、右鍵設定 A-B 循環、縮放記憶事件
             PianoRoll.ScrubStarted += OnPianoRollScrubStarted;
             PianoRoll.TimeScrubbed += OnPianoRollTimeScrubbed;
             PianoRoll.ScrubEnded += OnPianoRollScrubEnded;
+            PianoRoll.LoopPointRightClicked += OnPianoRollLoopPointRightClicked;
+            PianoRoll.VisibleWindowChanged += s => ThemeManager.SetLastVisibleWindowSeconds(s);
+
+            // 綁定底部 88 鍵鋼琴鍵盤滑鼠點擊與滑奏試聽事件
+            PianoKeyboard.KeyPreviewChanged += OnPianoKeyboardPreviewChanged;
 
             _audioEngine.PlaybackCompleted += () =>
             {
@@ -88,7 +101,12 @@ namespace WinMusicXmlPlayer
                 TxtSoundFontStatus.Text = "目前音源：尚未載入 .sf2 音源檔（請點擊右上角設定音源）";
             }
 
-            UpdateViewModeButtonVisual(PianoRoll.ViewMode);
+            PianoRoll.VisibleWindowSeconds = ThemeManager.LastVisibleWindowSeconds;
+            PianoRollViewMode savedMode = ThemeManager.LastViewMode == 1
+                ? PianoRollViewMode.VerticalFalling
+                : PianoRollViewMode.HorizontalTimeline;
+            SetPianoRollViewMode(savedMode, savePref: false);
+            RefreshRecentFilesMenu();
 
             // 2. 預設不載入任何 MusicXML 樂譜，啟動 60FPS 畫面同步迴圈
             CompositionTarget.Rendering += OnCompositionTargetRendering;
@@ -97,6 +115,7 @@ namespace WinMusicXmlPlayer
         private void MainWindow_Closed(object? sender, EventArgs e)
         {
             CompositionTarget.Rendering -= OnCompositionTargetRendering;
+            ThemeManager.FlushPreferences();
             _audioEngine.Dispose();
         }
 
@@ -113,6 +132,8 @@ namespace WinMusicXmlPlayer
                 _currentScore = score;
                 _currentFilePath = filePath;
                 ThemeManager.SetLastOpenedDirectory(Path.GetDirectoryName(Path.GetFullPath(filePath)));
+                ThemeManager.AddRecentFile(filePath);
+                RefreshRecentFilesMenu();
 
                 TxtScoreTitle.Text = string.IsNullOrWhiteSpace(score.Composer)
                     ? score.Title
@@ -132,6 +153,13 @@ namespace WinMusicXmlPlayer
                 PianoRoll.SetScore(score);
                 PianoKeyboard.SetScore(score);
                 _audioEngine.LoadScore(score);
+                _loopState = 0;
+                UpdateLoopButtonUi();
+                _lastRenderedTimeSec = -1.0;
+                _lastDisplayedTenths = -1;
+                _lastTelemetryTimelineIdx = -1;
+                _lastTelemetrySpeedBpm = -1;
+                _metersActive = true;
 
                 SliderTimeline.Maximum = Math.Max(1.0, score.TotalDurationSeconds);
                 SliderTimeline.Value = 0.0;
@@ -157,18 +185,34 @@ namespace WinMusicXmlPlayer
             if (_currentScore == null) return;
 
             double curSec = _audioEngine.CurrentTimeSeconds;
+            bool isPlaying = _audioEngine.IsPlaying;
+            bool timeChanged = Math.Abs(curSec - _lastRenderedTimeSec) > 0.0005;
 
-            PianoRoll.UpdatePlaybackTime(curSec);
-            PianoKeyboard.UpdatePlaybackTime(curSec);
+            if (!isPlaying && !timeChanged && !_metersActive)
+                return;
 
-            if (!_isSliderDragging)
+            if (timeChanged)
             {
-                SliderTimeline.Value = Math.Min(SliderTimeline.Maximum, curSec);
+                _lastRenderedTimeSec = curSec;
+                PianoRoll.UpdatePlaybackTime(curSec);
+                PianoKeyboard.UpdatePlaybackTime(curSec);
+
+                if (!_isSliderDragging)
+                {
+                    SliderTimeline.Value = Math.Min(SliderTimeline.Maximum, curSec);
+                }
+
+                int tenths = (int)(curSec * 10.0);
+                if (tenths != _lastDisplayedTenths)
+                {
+                    _lastDisplayedTenths = tenths;
+                    TxtCurrentTime.Text = FormatTime(curSec);
+                }
+
+                UpdateMusicalTelemetry(curSec);
             }
 
-            TxtCurrentTime.Text = FormatTime(curSec);
-            UpdateMusicalTelemetry(curSec);
-            UpdateTrackActivityMeters(curSec);
+            _metersActive = UpdateTrackActivityMeters(curSec);
         }
 
         private void UpdateMusicalTelemetry(double curSec)
@@ -176,25 +220,24 @@ namespace WinMusicXmlPlayer
             if (_currentScore == null || _currentScore.Measures.Count == 0) return;
 
             var measures = _currentScore.Measures;
-            MeasureMarker currentMeas = measures[0];
+            MeasureMarker currentMeas = _currentScore.FindMeasureAt(curSec);
+            int speedBpm = (int)Math.Round(currentMeas.TempoBpm * _audioEngine.PlaybackSpeed);
 
-            for (int i = 0; i < measures.Count; i++)
-            {
-                if (measures[i].StartTimeSeconds <= curSec + 0.005)
-                    currentMeas = measures[i];
-                else
-                    break;
-            }
+            if (currentMeas.TimelineIndex == _lastTelemetryTimelineIdx && speedBpm == _lastTelemetrySpeedBpm)
+                return;
+
+            _lastTelemetryTimelineIdx = currentMeas.TimelineIndex;
+            _lastTelemetrySpeedBpm = speedBpm;
 
             TxtMeasureStatus.Text = $"小節：{currentMeas.MeasureNumberText} / {measures[^1].NumericMeasureNumber}";
             TxtTimeSigStatus.Text = $"拍號：{currentMeas.Beats}/{currentMeas.BeatType}";
             TxtKeySigStatus.Text = $"調號：{currentMeas.KeySignatureName}";
-            TxtTempoStatus.Text = $"速度：{Math.Round(currentMeas.TempoBpm * _audioEngine.PlaybackSpeed)} BPM";
+            TxtTempoStatus.Text = $"速度：{speedBpm} BPM";
         }
 
-        private void UpdateTrackActivityMeters(double curSec)
+        private bool UpdateTrackActivityMeters(double curSec)
         {
-            if (_currentScore == null) return;
+            if (_currentScore == null) return false;
 
             bool anySolo = _currentScore.Tracks.Any(t => t.IsSolo);
             double[] maxLevels = new double[_currentScore.Tracks.Count];
@@ -202,22 +245,7 @@ namespace WinMusicXmlPlayer
             if (_audioEngine.IsPlaying)
             {
                 var notes = _currentScore.Notes;
-                int lo = 0, hi = notes.Count - 1, idx = 0;
-                while (lo <= hi)
-                {
-                    int mid = (lo + hi) >> 1;
-                    if (notes[mid].StartTimeSeconds <= curSec)
-                    {
-                        idx = mid;
-                        lo = mid + 1;
-                    }
-                    else
-                    {
-                        hi = mid - 1;
-                    }
-                }
-
-                int start = Math.Max(0, idx - 180);
+                int start = _currentScore.FindFirstNoteIndexForWindow(curSec);
                 for (int i = start; i < notes.Count; i++)
                 {
                     var n = notes[i];
@@ -236,6 +264,7 @@ namespace WinMusicXmlPlayer
                 }
             }
 
+            bool anyActive = false;
             for (int t = 0; t < _currentScore.Tracks.Count; t++)
             {
                 double prev = _currentScore.Tracks[t].CurrentActivity;
@@ -249,8 +278,12 @@ namespace WinMusicXmlPlayer
                 {
                     smoothed = Math.Max(target, prev * 0.82 - 0.018);
                 }
-                _currentScore.Tracks[t].CurrentActivity = Math.Clamp(smoothed, 0.0, 1.0);
+                double clamped = Math.Clamp(smoothed, 0.0, 1.0);
+                _currentScore.Tracks[t].CurrentActivity = clamped;
+                if (clamped > 0.002)
+                    anyActive = true;
             }
+            return anyActive;
         }
 
         // ==================== 鋼琴卷軸滑鼠左右滑動調整時間事件 ====================
@@ -372,6 +405,12 @@ namespace WinMusicXmlPlayer
                     BtnOpenFile_Click(this, new RoutedEventArgs());
                     return;
                 }
+                if (key == Key.E)
+                {
+                    e.Handled = true;
+                    MenuExportWav_Click(this, new RoutedEventArgs());
+                    return;
+                }
                 if (key == Key.Q)
                 {
                     e.Handled = true;
@@ -388,6 +427,12 @@ namespace WinMusicXmlPlayer
                 {
                     e.Handled = true;
                     MenuPreferences_Click(this, new RoutedEventArgs());
+                    return;
+                }
+                if (key == Key.G)
+                {
+                    e.Handled = true;
+                    OpenGotoMeasureInput();
                     return;
                 }
             }
@@ -415,16 +460,91 @@ namespace WinMusicXmlPlayer
                     return;
                 }
             }
-            else if (mods == ModifierKeys.None && key == Key.F1)
+            else if (mods == ModifierKeys.None)
             {
-                e.Handled = true;
-                MenuAbout_Click(this, new RoutedEventArgs());
+                if (key == Key.F1)
+                {
+                    e.Handled = true;
+                    MenuAbout_Click(this, new RoutedEventArgs());
+                    return;
+                }
+
+                // 若焦點不在下拉選單或輸入框內，支援 Space 播放/暫停、左右方向鍵快退/快進 5 秒、Home 回到開頭、M 靜音切換
+                if (Keyboard.FocusedElement is not ComboBox and not ComboBoxItem and not TextBox)
+                {
+                    if (key == Key.Space && _currentScore != null)
+                    {
+                        e.Handled = true;
+                        BtnPlayPause_Click(this, new RoutedEventArgs());
+                        return;
+                    }
+                    if (key == Key.Left && _currentScore != null)
+                    {
+                        e.Handled = true;
+                        BtnStepBack_Click(this, new RoutedEventArgs());
+                        return;
+                    }
+                    if (key == Key.Right && _currentScore != null)
+                    {
+                        e.Handled = true;
+                        BtnStepForward_Click(this, new RoutedEventArgs());
+                        return;
+                    }
+                    if (key == Key.Home && _currentScore != null)
+                    {
+                        e.Handled = true;
+                        _audioEngine.Seek(0.0);
+                        return;
+                    }
+                    if (key == Key.M)
+                    {
+                        e.Handled = true;
+                        ToggleMasterMute();
+                        return;
+                    }
+                }
             }
         }
 
         private void MenuExit_Click(object sender, RoutedEventArgs e)
         {
             Close();
+        }
+
+        private async void MenuExportWav_Click(object sender, RoutedEventArgs e)
+        {
+            CloseOtherTopMenus(null);
+            if (_currentScore == null)
+            {
+                ShowToast("請先開啟一份 MusicXML 樂譜再匯出 WAV");
+                return;
+            }
+
+            string defaultFileName = Path.GetFileNameWithoutExtension(_currentScore.FileName) + ".wav";
+            var dlg = new SaveFileDialog
+            {
+                Title = "匯出 WAV 音訊檔 (44.1kHz 16-bit 立體聲)",
+                InitialDirectory = ThemeManager.GetInitialMusicXmlDirectory(),
+                FileName = defaultFileName,
+                DefaultExt = ".wav",
+                Filter = "WAV 音訊檔案 (*.wav)|*.wav"
+            };
+
+            if (dlg.ShowDialog(this) == true)
+            {
+                string outPath = dlg.FileName;
+                ShowToast("⏳ 正在背景高速合成 WAV 音訊檔...");
+                string err = string.Empty;
+                bool ok = await System.Threading.Tasks.Task.Run(() => _audioEngine.ExportToWavFile(outPath, out err));
+                if (ok)
+                {
+                    ShowToast($"✓ 已匯出 WAV：{Path.GetFileName(outPath)}");
+                }
+                else
+                {
+                    MessageBox.Show(this, $"匯出 WAV 失敗：\n{err}", "匯出錯誤", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+            }
         }
 
         private void MenuSoundFontSettings_Click(object sender, RoutedEventArgs e)
@@ -498,13 +618,17 @@ namespace WinMusicXmlPlayer
             var next = PianoRoll.ViewMode == PianoRollViewMode.HorizontalTimeline
                 ? PianoRollViewMode.VerticalFalling
                 : PianoRollViewMode.HorizontalTimeline;
-            SetPianoRollViewMode(next);
+            SetPianoRollViewMode(next, savePref: true);
         }
 
-        private void SetPianoRollViewMode(PianoRollViewMode mode)
+        private void SetPianoRollViewMode(PianoRollViewMode mode, bool savePref = true)
         {
             if (PianoRoll == null) return;
             PianoRoll.ViewMode = mode;
+            if (savePref)
+            {
+                ThemeManager.SetLastViewMode(mode == PianoRollViewMode.VerticalFalling ? 1 : 0);
+            }
             UpdateViewModeButtonVisual(mode);
         }
 
@@ -514,6 +638,234 @@ namespace WinMusicXmlPlayer
             BtnToggleViewMode.Content = mode == PianoRollViewMode.HorizontalTimeline
                 ? "⇄ 水平時間軸卷軸"
                 : "⬇ 垂直下落瀑布流";
+        }
+
+        // ==================== 最近開啟的樂譜選單 ====================
+
+        private void RefreshRecentFilesMenu()
+        {
+            if (MenuRecentFiles == null) return;
+            MenuRecentFiles.Items.Clear();
+
+            var recents = ThemeManager.RecentFiles;
+            var menuStyle = TryFindResource("SystemMenuItemStyle") as Style;
+            var sepStyle = TryFindResource("SystemMenuSeparatorStyle") as Style;
+
+            if (recents.Count == 0)
+            {
+                var emptyItem = new MenuItem
+                {
+                    Header = "(尚無最近開啟紀錄)",
+                    IsEnabled = false,
+                    Style = menuStyle
+                };
+                MenuRecentFiles.Items.Add(emptyItem);
+                return;
+            }
+
+            for (int i = 0; i < recents.Count; i++)
+            {
+                string path = recents[i];
+                string fileName = Path.GetFileName(path);
+                var item = new MenuItem
+                {
+                    Header = $"{i + 1}. {fileName}",
+                    ToolTip = path,
+                    Style = menuStyle
+                };
+                item.Click += (_, _) =>
+                {
+                    CloseOtherTopMenus(null);
+                    if (File.Exists(path))
+                    {
+                        LoadMusicXmlFile(path, autoPlay: false);
+                    }
+                    else
+                    {
+                        ShowToast("檔案已不存在或已被移動");
+                        RefreshRecentFilesMenu();
+                    }
+                };
+                MenuRecentFiles.Items.Add(item);
+            }
+
+            MenuRecentFiles.Items.Add(new Separator { Style = sepStyle });
+            var clearItem = new MenuItem
+            {
+                Header = "清除最近開啟紀錄",
+                Style = menuStyle
+            };
+            clearItem.Click += (_, _) =>
+            {
+                CloseOtherTopMenus(null);
+                ThemeManager.ClearRecentFiles();
+                RefreshRecentFilesMenu();
+                ShowToast("已清除最近開啟紀錄");
+            };
+            MenuRecentFiles.Items.Add(clearItem);
+        }
+
+        // ==================== 88 鍵鋼琴鍵盤點擊試聽與 A-B 區間循環 ====================
+
+        private void OnPianoKeyboardPreviewChanged(int midiPitch, bool isNoteOn)
+        {
+            if (isNoteOn)
+            {
+                _audioEngine.PreviewNoteOn(midiPitch, 98);
+            }
+            else
+            {
+                _audioEngine.PreviewNoteOff(midiPitch);
+            }
+        }
+
+        private void BtnLoopAB_Click(object sender, RoutedEventArgs e)
+        {
+            AdvanceLoopStateAtTime(_audioEngine.CurrentTimeSeconds);
+        }
+
+        private void OnPianoRollLoopPointRightClicked(double clickedTimeSec)
+        {
+            AdvanceLoopStateAtTime(clickedTimeSec);
+        }
+
+        private void AdvanceLoopStateAtTime(double timeSec)
+        {
+            if (_currentScore == null)
+            {
+                ShowToast("請先開啟一份 MusicXML 樂譜再設定 A-B 循環");
+                return;
+            }
+
+            double clamped = Math.Clamp(timeSec, 0.0, _currentScore.TotalDurationSeconds);
+            if (_loopState == 0)
+            {
+                _audioEngine.SetLoopPointA(clamped);
+                _loopState = 1;
+                UpdateLoopButtonUi();
+                ShowToast($"📍 已設定循環起點 A：{FormatTime(clamped)}（再次點擊設定終點 B）");
+            }
+            else if (_loopState == 1)
+            {
+                double startA = _audioEngine.LoopStartSeconds ?? 0.0;
+                if (Math.Abs(clamped - startA) < 0.15)
+                {
+                    clamped = Math.Min(_currentScore.TotalDurationSeconds, startA + 2.0);
+                }
+                _audioEngine.SetLoopPointB(clamped);
+                _loopState = _audioEngine.IsLoopEnabled ? 2 : 0;
+                UpdateLoopButtonUi();
+                if (_audioEngine.IsLoopEnabled)
+                {
+                    ShowToast($"🔁 已啟用 A-B 循環：{FormatTime(_audioEngine.LoopStartSeconds ?? 0)} ～ {FormatTime(_audioEngine.LoopEndSeconds ?? 0)}");
+                }
+            }
+            else
+            {
+                _audioEngine.ClearLoop();
+                _loopState = 0;
+                UpdateLoopButtonUi();
+                ShowToast("已取消 A-B 區間循環");
+            }
+        }
+
+        private void UpdateLoopButtonUi()
+        {
+            if (BtnLoopAB == null) return;
+            PianoRoll.SetLoopMarkers(_audioEngine.LoopStartSeconds, _audioEngine.LoopEndSeconds, _audioEngine.IsLoopEnabled);
+
+            if (_loopState == 1 && _audioEngine.LoopStartSeconds.HasValue)
+            {
+                BtnLoopAB.Content = $"📍 A: {FormatTime(_audioEngine.LoopStartSeconds.Value)} → 設 B";
+            }
+            else if (_loopState == 2 && _audioEngine.IsLoopEnabled)
+            {
+                BtnLoopAB.Content = "🔁 清除 A-B";
+            }
+            else
+            {
+                BtnLoopAB.Content = "🔁 A-B 循環";
+            }
+        }
+
+        // ==================== 小節號點擊跳轉 (Go to Measure) ====================
+
+        private void MenuGotoMeasure_Click(object sender, RoutedEventArgs e)
+        {
+            CloseOtherTopMenus(null);
+            OpenGotoMeasureInput();
+        }
+
+        private void MeasureBadge_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            e.Handled = true;
+            OpenGotoMeasureInput();
+        }
+
+        private void OpenGotoMeasureInput()
+        {
+            if (_currentScore == null || _currentScore.Measures.Count == 0)
+            {
+                ShowToast("請先開啟一份 MusicXML 樂譜再跳轉小節");
+                return;
+            }
+
+            MeasureMarker cur = _currentScore.FindMeasureAt(_audioEngine.CurrentTimeSeconds);
+            TxtGotoMeasureInput.Text = cur.NumericMeasureNumber.ToString();
+            TxtGotoMeasureInput.Visibility = Visibility.Visible;
+            TxtGotoMeasureInput.Focus();
+            TxtGotoMeasureInput.SelectAll();
+        }
+
+        private void CommitGotoMeasureInput()
+        {
+            if (TxtGotoMeasureInput.Visibility != Visibility.Visible) return;
+            string raw = TxtGotoMeasureInput.Text.Trim();
+            TxtGotoMeasureInput.Visibility = Visibility.Collapsed;
+
+            if (_currentScore == null || _currentScore.Measures.Count == 0) return;
+
+            if (int.TryParse(raw, out int targetMeasureNum))
+            {
+                int maxMeas = _currentScore.Measures[^1].NumericMeasureNumber;
+                targetMeasureNum = Math.Clamp(targetMeasureNum, 1, Math.Max(1, maxMeas));
+                var match = _currentScore.Measures.FirstOrDefault(m => m.NumericMeasureNumber >= targetMeasureNum)
+                            ?? _currentScore.Measures[^1];
+
+                double targetSec = match.StartTimeSeconds;
+                _audioEngine.Seek(targetSec);
+                PianoRoll.UpdatePlaybackTime(targetSec);
+                PianoKeyboard.UpdatePlaybackTime(targetSec);
+                SliderTimeline.Value = Math.Min(SliderTimeline.Maximum, targetSec);
+                TxtCurrentTime.Text = FormatTime(targetSec);
+                _lastTelemetryTimelineIdx = -1;
+                UpdateMusicalTelemetry(targetSec);
+                ShowToast($"已跳轉至第 {match.MeasureNumberText} 小節");
+            }
+        }
+
+        private void CancelGotoMeasureInput()
+        {
+            TxtGotoMeasureInput.Visibility = Visibility.Collapsed;
+        }
+
+        private void TxtGotoMeasureInput_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.Enter)
+            {
+                e.Handled = true;
+                CommitGotoMeasureInput();
+            }
+            else if (e.Key == Key.Escape)
+            {
+                e.Handled = true;
+                CancelGotoMeasureInput();
+            }
+        }
+
+        private void TxtGotoMeasureInput_LostFocus(object sender, RoutedEventArgs e)
+        {
+            CancelGotoMeasureInput();
         }
 
         private void BtnLoadSoundFont_Click(object sender, RoutedEventArgs e)
@@ -537,7 +889,17 @@ namespace WinMusicXmlPlayer
 
         private void TrackVolume_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
-            _audioEngine.SyncTrackSettings();
+            _audioEngine.UpdateTrackVolumesOnly();
+        }
+
+        private void TrackVolumeSlider_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+        {
+            if (sender is Slider slider && slider.DataContext is ScorePartTrack track)
+            {
+                e.Handled = true;
+                track.Volume = 1.0;
+                _audioEngine.UpdateTrackVolumesOnly();
+            }
         }
 
         private void TrackVisibility_Changed(object sender, RoutedEventArgs e)
@@ -676,8 +1038,57 @@ namespace WinMusicXmlPlayer
         private void SliderMasterVolume_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
             if (_audioEngine == null || TxtMasterVolume == null) return;
-            _audioEngine.MasterVolume = e.NewValue;
-            TxtMasterVolume.Text = $"{(int)Math.Round(e.NewValue * 100)}%";
+            double snapped = Math.Round(e.NewValue * 20.0) / 20.0;
+            if (Math.Abs(SliderMasterVolume.Value - snapped) > 0.001)
+            {
+                SliderMasterVolume.Value = snapped;
+                return;
+            }
+
+            _audioEngine.MasterVolume = snapped;
+            TxtMasterVolume.Text = $"{(int)Math.Round(snapped * 100)}%";
+
+            if (snapped > 0.001)
+            {
+                _isMasterMuted = false;
+                _masterVolumeBeforeMute = snapped;
+                if (TxtMasterVolumeLabel != null)
+                    TxtMasterVolumeLabel.Text = "🔊 主音量：";
+            }
+            else
+            {
+                _isMasterMuted = true;
+                if (TxtMasterVolumeLabel != null)
+                    TxtMasterVolumeLabel.Text = "🔇 已靜音：";
+            }
+        }
+
+        private void SliderMasterVolume_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+        {
+            e.Handled = true;
+            SliderMasterVolume.Value = 1.0;
+        }
+
+        private void TxtMasterVolumeLabel_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            e.Handled = true;
+            ToggleMasterMute();
+        }
+
+        private void ToggleMasterMute()
+        {
+            if (_isMasterMuted || SliderMasterVolume.Value <= 0.001)
+            {
+                double restore = _masterVolumeBeforeMute > 0.05 ? _masterVolumeBeforeMute : 1.0;
+                SliderMasterVolume.Value = Math.Round(restore * 20.0) / 20.0;
+                ShowToast($"🔊 已恢復主音量 ({TxtMasterVolume.Text})");
+            }
+            else
+            {
+                _masterVolumeBeforeMute = SliderMasterVolume.Value;
+                SliderMasterVolume.Value = 0.0;
+                ShowToast("🔇 主音量已靜音 (按 M 可恢復)");
+            }
         }
 
         private void BtnZoomIn_Click(object sender, RoutedEventArgs e)
@@ -785,6 +1196,7 @@ namespace WinMusicXmlPlayer
             MenuHelp.IsSubmenuOpen = false;
 
             // 3. 測試單一按鈕切換鋼琴卷軸模式
+            SetPianoRollViewMode(PianoRollViewMode.HorizontalTimeline, savePref: false);
             BtnToggleViewMode_Click(this, new RoutedEventArgs());
             if (PianoRoll.ViewMode != PianoRollViewMode.VerticalFalling)
                 throw new InvalidOperationException("Expected VerticalFalling after first toggle.");

@@ -19,6 +19,7 @@ namespace WinMusicXmlPlayer
         {
             InitializeComponent();
             SourceInitialized += (_, _) => ThemeManager.ApplyWindowDwmStyle(this);
+            Closed += (_, _) => ThemeManager.FlushPreferences();
             BuildPresetSwatches();
             SyncUiFromThemeManager();
         }
@@ -175,7 +176,7 @@ namespace WinMusicXmlPlayer
             _isSyncingUi = true;
             try
             {
-                ThemeManager.SetCustomHue(e.NewValue);
+                ThemeManager.SetCustomHue(e.NewValue, saveImmediately: false);
                 UpdateDisplayModeButtonsVisual(ThemeManager.DisplayMode);
                 UpdateWindowStyleButtonsVisual(ThemeManager.WindowStyle);
                 UpdateColorVisualIndicators();

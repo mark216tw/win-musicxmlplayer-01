@@ -23,9 +23,69 @@ namespace WinMusicXmlPlayer.Models
         public List<NoteEvent> Notes { get; set; } = new();
         public List<MeasureMarker> Measures { get; set; } = new();
 
+        /// <summary>
+        /// 單調遞增的前綴最大結束時間陣列：MaxEndTimePrefix[i] = max(0..i 之 EndTimeSeconds)
+        /// 用於 O(log N) 精準定位視窗內第一個尚未結束的音符，避免長音遺漏與硬編碼回推
+        /// </summary>
+        public double[] MaxEndTimePrefix { get; set; } = Array.Empty<double>();
+
         public double TotalDurationSeconds { get; set; }
         public int MinMidiPitch { get; set; } = 48;
         public int MaxMidiPitch { get; set; } = 84;
+
+        public int FindFirstNoteIndexForWindow(double windowStartSec)
+        {
+            var prefix = MaxEndTimePrefix;
+            if (prefix.Length == 0 || Notes.Count == 0)
+                return 0;
+
+            int lo = 0;
+            int hi = prefix.Length - 1;
+            int ans = prefix.Length;
+            while (lo <= hi)
+            {
+                int mid = (lo + hi) >> 1;
+                if (prefix[mid] >= windowStartSec)
+                {
+                    ans = mid;
+                    hi = mid - 1;
+                }
+                else
+                {
+                    lo = mid + 1;
+                }
+            }
+            return ans < Notes.Count ? ans : Notes.Count;
+        }
+
+        /// <summary>
+        /// 以 O(log M) 二分搜尋定位指定秒數所在的小節標記
+        /// </summary>
+        public MeasureMarker FindMeasureAt(double timeSec)
+        {
+            int count = Measures.Count;
+            if (count == 0)
+                return new MeasureMarker();
+
+            int lo = 0;
+            int hi = count - 1;
+            int found = 0;
+            double target = timeSec + 0.005;
+            while (lo <= hi)
+            {
+                int mid = (lo + hi) >> 1;
+                if (Measures[mid].StartTimeSeconds <= target)
+                {
+                    found = mid;
+                    lo = mid + 1;
+                }
+                else
+                {
+                    hi = mid - 1;
+                }
+            }
+            return Measures[found];
+        }
     }
 
     public class ScorePartTrack : INotifyPropertyChanged
@@ -47,9 +107,33 @@ namespace WinMusicXmlPlayer.Models
         private bool _isVisibleOnRoll = true;
         private string _colorHex = "#38BDF8";
         private Color _themeColor = Color.FromRgb(56, 189, 248);
-        private SolidColorBrush _themeBrush = new(Color.FromRgb(56, 189, 248));
+        private SolidColorBrush _themeBrush = CreateFrozenSolidBrush(Color.FromRgb(56, 189, 248));
+        private SolidColorBrush _mutedThemeBrush = CreateFrozenSolidBrush(Color.FromArgb(65, 56, 189, 248));
+        private LinearGradientBrush _whitePressedKeyBrush = CreateFrozenKeyGradient(Color.FromRgb(56, 189, 248), 38);
+        private LinearGradientBrush _blackPressedKeyBrush = CreateFrozenKeyGradient(Color.FromRgb(56, 189, 248), 45);
         private int _noteCount;
         private double _currentActivity;
+
+        private static SolidColorBrush CreateFrozenSolidBrush(Color c)
+        {
+            var b = new SolidColorBrush(c);
+            b.Freeze();
+            return b;
+        }
+
+        private static LinearGradientBrush CreateFrozenKeyGradient(Color c, int highlightBoost)
+        {
+            var g = new LinearGradientBrush(
+                Color.FromRgb(
+                    (byte)Math.Min(255, c.R + highlightBoost),
+                    (byte)Math.Min(255, c.G + highlightBoost),
+                    (byte)Math.Min(255, c.B + highlightBoost)),
+                c,
+                new System.Windows.Point(0, 0),
+                new System.Windows.Point(0, 1));
+            g.Freeze();
+            return g;
+        }
 
         public string TrackId
         {
@@ -134,7 +218,8 @@ namespace WinMusicXmlPlayer.Models
             get => _volume;
             set
             {
-                double clamped = Math.Clamp(value, 0.0, 1.5);
+                // 以 5% (0.05) 為單位對齊
+                double clamped = Math.Round(Math.Clamp(value, 0.0, 1.5) * 20.0) / 20.0;
                 if (Math.Abs(_volume - clamped) > 0.0001)
                 {
                     _volume = clamped;
@@ -194,9 +279,10 @@ namespace WinMusicXmlPlayer.Models
                 try
                 {
                     _themeColor = (Color)ColorConverter.ConvertFromString(value);
-                    var brush = new SolidColorBrush(_themeColor);
-                    brush.Freeze();
-                    _themeBrush = brush;
+                    _themeBrush = CreateFrozenSolidBrush(_themeColor);
+                    _mutedThemeBrush = CreateFrozenSolidBrush(Color.FromArgb(65, _themeColor.R, _themeColor.G, _themeColor.B));
+                    _whitePressedKeyBrush = CreateFrozenKeyGradient(_themeColor, 38);
+                    _blackPressedKeyBrush = CreateFrozenKeyGradient(_themeColor, 45);
                 }
                 catch
                 {
@@ -205,11 +291,15 @@ namespace WinMusicXmlPlayer.Models
                 OnPropertyChanged();
                 OnPropertyChanged(nameof(ThemeColor));
                 OnPropertyChanged(nameof(ThemeBrush));
+                OnPropertyChanged(nameof(MutedThemeBrush));
             }
         }
 
         public Color ThemeColor => _themeColor;
         public SolidColorBrush ThemeBrush => _themeBrush;
+        public SolidColorBrush MutedThemeBrush => _mutedThemeBrush;
+        public LinearGradientBrush WhitePressedKeyBrush => _whitePressedKeyBrush;
+        public LinearGradientBrush BlackPressedKeyBrush => _blackPressedKeyBrush;
 
         public int NoteCount
         {

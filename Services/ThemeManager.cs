@@ -45,12 +45,22 @@ namespace WinMusicXmlPlayer.Services
         public string LastOpenedDirectory { get; set; } = string.Empty;
         public string GeneralSoundFontPath { get; set; } = string.Empty;
         public string PianoSoundFontPath { get; set; } = string.Empty;
+        public List<string> RecentFiles { get; set; } = new();
+        public int LastViewMode { get; set; } = 0;
+        public double LastVisibleWindowSeconds { get; set; } = 19.53;
     }
 
     public static class ThemeManager
     {
-        private static readonly string PreferencesFilePath = Path.Combine(
+        private static readonly string PortablePreferencesFilePath = Path.Combine(
             AppDomain.CurrentDomain.BaseDirectory, "user_preferences.json");
+
+        private static readonly string AppDataPreferencesFilePath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "WinMusicXmlPlayer",
+            "user_preferences.json");
+
+        private static bool _preferencesDirty;
 
         public static readonly IReadOnlyList<ThemeColorPreset> Presets = BuildPresets();
 
@@ -63,6 +73,9 @@ namespace WinMusicXmlPlayer.Services
         private static string _lastOpenedDirectory = string.Empty;
         private static string _generalSoundFontPath = string.Empty;
         private static string _pianoSoundFontPath = string.Empty;
+        private static readonly List<string> _recentFiles = new();
+        private static int _lastViewMode = 0;
+        private static double _lastVisibleWindowSeconds = 19.53;
         private static Color _currentAccentColor = ColorFromHue(199.0);
         private static bool _isDarkEffective = true;
         private static bool _systemHooked;
@@ -75,6 +88,9 @@ namespace WinMusicXmlPlayer.Services
         public static string LastOpenedDirectory => _lastOpenedDirectory;
         public static string GeneralSoundFontPath => _generalSoundFontPath;
         public static string PianoSoundFontPath => _pianoSoundFontPath;
+        public static IReadOnlyList<string> RecentFiles => _recentFiles;
+        public static int LastViewMode => _lastViewMode;
+        public static double LastVisibleWindowSeconds => _lastVisibleWindowSeconds;
         public static Color CurrentAccentColor => _currentAccentColor;
         public static bool IsDarkMode => _isDarkEffective;
 
@@ -181,6 +197,44 @@ namespace WinMusicXmlPlayer.Services
             SavePreferences();
         }
 
+        public static void AddRecentFile(string filePath)
+        {
+            if (string.IsNullOrWhiteSpace(filePath)) return;
+            string full = Path.GetFullPath(filePath);
+            _recentFiles.RemoveAll(f => string.Equals(f, full, StringComparison.OrdinalIgnoreCase));
+            _recentFiles.Insert(0, full);
+            if (_recentFiles.Count > 8)
+            {
+                _recentFiles.RemoveRange(8, _recentFiles.Count - 8);
+            }
+            SavePreferences();
+        }
+
+        public static void ClearRecentFiles()
+        {
+            _recentFiles.Clear();
+            SavePreferences();
+        }
+
+        public static void SetLastViewMode(int viewMode)
+        {
+            if (_lastViewMode != viewMode)
+            {
+                _lastViewMode = viewMode;
+                SavePreferences();
+            }
+        }
+
+        public static void SetLastVisibleWindowSeconds(double seconds)
+        {
+            double clamped = Math.Clamp(seconds, 3.0, 40.0);
+            if (Math.Abs(_lastVisibleWindowSeconds - clamped) > 0.05)
+            {
+                _lastVisibleWindowSeconds = clamped;
+                _preferencesDirty = true;
+            }
+        }
+
         public static void SetDisplayMode(ThemeDisplayMode mode)
         {
             _displayMode = mode;
@@ -206,7 +260,7 @@ namespace WinMusicXmlPlayer.Services
             SavePreferences();
         }
 
-        public static void SetCustomHue(double hue)
+        public static void SetCustomHue(double hue, bool saveImmediately = true)
         {
             double normalized = Math.Clamp(hue, 0.0, 360.0);
             _currentHue = normalized;
@@ -224,7 +278,22 @@ namespace WinMusicXmlPlayer.Services
             _selectedPresetIndex = matchedPreset;
 
             ApplyTheme();
-            SavePreferences();
+            if (saveImmediately)
+            {
+                SavePreferences();
+            }
+            else
+            {
+                _preferencesDirty = true;
+            }
+        }
+
+        public static void FlushPreferences()
+        {
+            if (_preferencesDirty)
+            {
+                SavePreferences();
+            }
         }
 
         public static void ApplyTheme()
@@ -591,8 +660,14 @@ namespace WinMusicXmlPlayer.Services
         {
             try
             {
-                if (!File.Exists(PreferencesFilePath)) return;
-                string json = File.ReadAllText(PreferencesFilePath);
+                string? targetPath = null;
+                if (File.Exists(PortablePreferencesFilePath))
+                    targetPath = PortablePreferencesFilePath;
+                else if (File.Exists(AppDataPreferencesFilePath))
+                    targetPath = AppDataPreferencesFilePath;
+
+                if (targetPath == null) return;
+                string json = File.ReadAllText(targetPath);
                 var data = JsonSerializer.Deserialize<UserPreferencesData>(json);
                 if (data != null && data.SchemaVersion >= 2)
                 {
@@ -613,6 +688,22 @@ namespace WinMusicXmlPlayer.Services
                     {
                         _pianoSoundFontPath = data.PianoSoundFontPath;
                     }
+                    if (data.RecentFiles != null)
+                    {
+                        _recentFiles.Clear();
+                        foreach (string rf in data.RecentFiles)
+                        {
+                            if (!string.IsNullOrWhiteSpace(rf) && File.Exists(rf) && _recentFiles.Count < 8)
+                            {
+                                _recentFiles.Add(rf);
+                            }
+                        }
+                    }
+                    _lastViewMode = data.LastViewMode is 0 or 1 ? data.LastViewMode : 0;
+                    if (data.LastVisibleWindowSeconds >= 3.0 && data.LastVisibleWindowSeconds <= 40.0)
+                    {
+                        _lastVisibleWindowSeconds = data.LastVisibleWindowSeconds;
+                    }
                 }
             }
             catch
@@ -623,22 +714,40 @@ namespace WinMusicXmlPlayer.Services
 
         private static void SavePreferences()
         {
+            _preferencesDirty = false;
+            var data = new UserPreferencesData
+            {
+                SchemaVersion = 2,
+                Language = _language,
+                DisplayMode = _displayMode,
+                WindowStyle = _windowStyle,
+                ThemeHue = _currentHue,
+                SelectedPresetIndex = _selectedPresetIndex,
+                LastOpenedDirectory = _lastOpenedDirectory,
+                GeneralSoundFontPath = _generalSoundFontPath,
+                PianoSoundFontPath = _pianoSoundFontPath,
+                RecentFiles = new List<string>(_recentFiles),
+                LastViewMode = _lastViewMode,
+                LastVisibleWindowSeconds = _lastVisibleWindowSeconds
+            };
+            string json = JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
+
             try
             {
-                var data = new UserPreferencesData
-                {
-                    SchemaVersion = 2,
-                    Language = _language,
-                    DisplayMode = _displayMode,
-                    WindowStyle = _windowStyle,
-                    ThemeHue = _currentHue,
-                    SelectedPresetIndex = _selectedPresetIndex,
-                    LastOpenedDirectory = _lastOpenedDirectory,
-                    GeneralSoundFontPath = _generalSoundFontPath,
-                    PianoSoundFontPath = _pianoSoundFontPath
-                };
-                string json = JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
-                File.WriteAllText(PreferencesFilePath, json);
+                File.WriteAllText(PortablePreferencesFilePath, json);
+                return;
+            }
+            catch
+            {
+                // 當安裝於受保護目錄 (如 Program Files) 無法寫入 BaseDirectory 時，自動回退至 %LocalAppData%
+            }
+
+            try
+            {
+                string? dir = Path.GetDirectoryName(AppDataPreferencesFilePath);
+                if (!string.IsNullOrEmpty(dir))
+                    Directory.CreateDirectory(dir);
+                File.WriteAllText(AppDataPreferencesFilePath, json);
             }
             catch
             {

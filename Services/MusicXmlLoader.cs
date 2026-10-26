@@ -128,8 +128,6 @@ namespace WinMusicXmlPlayer.Services
             if (!File.Exists(filePath))
                 throw new FileNotFoundException($"找不到指定的 MusicXML 檔案：{filePath}");
 
-            var (xmlContent, jsonTitle, jsonSubtitle, jsonComposer, jsonTempoBpm) = ReadRawMusicXmlContent(filePath);
-
             var settings = new XmlReaderSettings
             {
                 DtdProcessing = DtdProcessing.Ignore,
@@ -137,12 +135,7 @@ namespace WinMusicXmlPlayer.Services
                 IgnoreProcessingInstructions = true
             };
 
-            XDocument doc;
-            using (var sr = new StringReader(xmlContent))
-            using (var xr = XmlReader.Create(sr, settings))
-            {
-                doc = XDocument.Load(xr);
-            }
+            var (doc, jsonTitle, jsonSubtitle, jsonComposer, jsonTempoBpm) = LoadXDocumentAndMeta(filePath, settings);
 
             XElement root = doc.Root ?? throw new InvalidDataException("無效的 MusicXML 檔案：缺少根節點。");
 
@@ -208,10 +201,6 @@ namespace WinMusicXmlPlayer.Services
             var partStavesFound = new Dictionary<string, HashSet<int>>();
             var partStaffVoiceNoteCounts = new Dictionary<(string partId, int staff, int voice), int>();
 
-            int curBeats = 4;
-            int curBeatType = 4;
-            int curFifths = 0;
-
             for (int pIdx = 0; pIdx < partElements.Count; pIdx++)
             {
                 var partEl = partElements[pIdx];
@@ -220,6 +209,9 @@ namespace WinMusicXmlPlayer.Services
 
                 var measures = partEl.Elements("measure").ToList();
                 int divisions = 1;
+                int curBeats = 4;
+                int curBeatType = 4;
+                int curFifths = 0;
                 int currentDynamicVel = 78;
                 bool activeSlur = false;
                 int activeWedgeType = 0; // 1 = cresc, -1 = dim
@@ -532,9 +524,12 @@ namespace WinMusicXmlPlayer.Services
                         }
                     }
 
-                    meta.Beats = curBeats;
-                    meta.BeatType = curBeatType;
-                    meta.Fifths = curFifths;
+                    if (pIdx == 0)
+                    {
+                        meta.Beats = curBeats;
+                        meta.BeatType = curBeatType;
+                        meta.Fifths = curFifths;
+                    }
 
                     double actualQuarterBeats = maxCursorDiv / divisions;
                     if (actualQuarterBeats > 0.05)
@@ -581,12 +576,22 @@ namespace WinMusicXmlPlayer.Services
             var usedColors = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             int nextChannel = 0;
 
-            int NextMelodicChannel()
+            int NextMelodicChannel(int gmProg)
             {
-                int ch = nextChannel;
-                nextChannel++;
                 if (nextChannel == 9) nextChannel = 10; // 避開 GM Channel 10 (index 9) 打擊樂通道
-                return Math.Min(ch, 15);
+                if (nextChannel <= 15)
+                {
+                    return nextChannel++;
+                }
+
+                // 當總聲部超過 15 軌時，優先共用相同樂器 (GmProgram) 的既有 MIDI Channel，避免全部擠在 Channel 15 互相覆蓋音色
+                var existingSameProg = score.Tracks.FirstOrDefault(t => t.GmProgram == gmProg);
+                if (existingSameProg != null)
+                {
+                    return existingSameProg.MidiChannel;
+                }
+
+                return 15;
             }
 
             bool isSinglePianoPart = scoreParts.Count == 1;
@@ -612,7 +617,7 @@ namespace WinMusicXmlPlayer.Services
                         Name = zhName,
                         OriginalPartName = sp.name,
                         StaffNumber = 1,
-                        MidiChannel = NextMelodicChannel(),
+                        MidiChannel = NextMelodicChannel(gmProg),
                         GmProgram = gmProg,
                         Pan = pan,
                         ColorHex = AssignDistinctTrackColor(zhName, gmProg, 1, null, trackIdx, usedColors)
@@ -646,7 +651,7 @@ namespace WinMusicXmlPlayer.Services
                             OriginalPartName = sp.name,
                             StaffNumber = 1,
                             VoiceFilter = primaryVoice,
-                            MidiChannel = NextMelodicChannel(),
+                            MidiChannel = NextMelodicChannel(gmProg),
                             GmProgram = gmProg,
                             Pan = 70,
                             ColorHex = AssignDistinctTrackColor("鋼琴 - 右手主旋律", gmProg, 1, primaryVoice, idxMelody, usedColors)
@@ -662,7 +667,7 @@ namespace WinMusicXmlPlayer.Services
                             OriginalPartName = sp.name,
                             StaffNumber = 1,
                             VoiceFilter = 2,
-                            MidiChannel = NextMelodicChannel(),
+                            MidiChannel = NextMelodicChannel(gmProg),
                             GmProgram = gmProg,
                             Pan = 62,
                             ColorHex = AssignDistinctTrackColor("鋼琴 - 右手伴奏", gmProg, 1, 2, idxAccomp, usedColors)
@@ -687,7 +692,7 @@ namespace WinMusicXmlPlayer.Services
                             Name = $"{prefix} - 右手 (高音譜表)",
                             OriginalPartName = sp.name,
                             StaffNumber = 1,
-                            MidiChannel = NextMelodicChannel(),
+                            MidiChannel = NextMelodicChannel(gmProg),
                             GmProgram = gmProg,
                             Pan = 72,
                             ColorHex = AssignDistinctTrackColor($"{prefix} - 右手", gmProg, 1, null, idxRight, usedColors)
@@ -712,7 +717,7 @@ namespace WinMusicXmlPlayer.Services
                             Name = $"{prefix} - 左手 (低音譜表)",
                             OriginalPartName = sp.name,
                             StaffNumber = stNum,
-                            MidiChannel = NextMelodicChannel(),
+                            MidiChannel = NextMelodicChannel(gmProg),
                             GmProgram = gmProg,
                             Pan = 54,
                             ColorHex = AssignDistinctTrackColor($"{prefix} - 左手", gmProg, stNum, null, idxLeft, usedColors)
@@ -1033,8 +1038,20 @@ namespace WinMusicXmlPlayer.Services
             // 防止同一軌道、同一音高重疊時前音未結束就把後音切斷
             PreventSamePitchOverlap(allNotes);
 
+            // 建立單調遞增的前綴最大結束時間陣列，供視窗裁剪與鍵盤狀態 O(log N) 精準二分定位
+            var prefixMax = new double[allNotes.Count];
+            double runningMaxEnd = 0.0;
+            for (int i = 0; i < allNotes.Count; i++)
+            {
+                double endSec = allNotes[i].EndTimeSeconds;
+                if (endSec > runningMaxEnd)
+                    runningMaxEnd = endSec;
+                prefixMax[i] = runningMaxEnd;
+            }
+
             score.Notes = allNotes;
-            score.TotalDurationSeconds = Math.Max(currentTimeSec, allNotes.Count > 0 ? allNotes.Max(n => n.EndTimeSeconds) : 0.0);
+            score.MaxEndTimePrefix = prefixMax;
+            score.TotalDurationSeconds = Math.Max(currentTimeSec, runningMaxEnd);
 
             if (allNotes.Count > 0)
             {
@@ -1358,22 +1375,29 @@ namespace WinMusicXmlPlayer.Services
             return Math.Clamp(midi, 12, 120);
         }
 
-        private static (string xml, string? title, string? subtitle, string? composer, double? tempoBpm) ReadRawMusicXmlContent(string filePath)
+        private static (XDocument doc, string? title, string? subtitle, string? composer, double? tempoBpm) LoadXDocumentAndMeta(
+            string filePath,
+            XmlReaderSettings settings)
         {
-            byte[] rawBytes = File.ReadAllBytes(filePath);
+            using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 65536);
+
+            // 讀取前 4 bytes 判斷是否為 ZIP (.mxl) 或 JSON 封裝格式，避免整檔讀入 byte[] 與 string 造成 3 倍記憶體峰值
+            Span<byte> header = stackalloc byte[4];
+            int headerRead = fs.Read(header);
+            fs.Position = 0;
 
             // 1. 檢查是否為 ZIP / .mxl 壓縮檔 (PK\x03\x04)
-            if (rawBytes.Length >= 4 && rawBytes[0] == 0x50 && rawBytes[1] == 0x4B && rawBytes[2] == 0x03 && rawBytes[3] == 0x04)
+            if (headerRead >= 4 && header[0] == 0x50 && header[1] == 0x4B && header[2] == 0x03 && header[3] == 0x04)
             {
-                using var ms = new MemoryStream(rawBytes);
-                using var archive = new ZipArchive(ms, ZipArchiveMode.Read);
+                using var archive = new ZipArchive(fs, ZipArchiveMode.Read, leaveOpen: false);
 
                 string? targetEntryPath = null;
                 var containerEntry = archive.GetEntry("META-INF/container.xml");
                 if (containerEntry != null)
                 {
-                    using var csr = new StreamReader(containerEntry.Open(), Encoding.UTF8);
-                    var cdoc = XDocument.Load(csr);
+                    using var cStream = containerEntry.Open();
+                    using var cxr = XmlReader.Create(cStream, settings);
+                    var cdoc = XDocument.Load(cxr);
                     targetEntryPath = cdoc.Descendants()
                         .FirstOrDefault(e => e.Name.LocalName == "rootfile")?
                         .Attribute("full-path")?.Value;
@@ -1391,22 +1415,26 @@ namespace WinMusicXmlPlayer.Services
                 if (xmlEntry == null)
                     throw new InvalidDataException("壓縮的 MXL 檔案中找不到有效的 MusicXML 內容。");
 
-                using var sr = new StreamReader(xmlEntry.Open(), Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-                return (sr.ReadToEnd(), null, null, null, null);
+                using var entryStream = xmlEntry.Open();
+                using var xr = XmlReader.Create(entryStream, settings);
+                return (XDocument.Load(xr), null, null, null, null);
             }
 
-            // 2. 轉為字串並檢查是否為 JSON 封裝格式 (如 K.496 與 K.545)
-            string text;
-            using (var ms = new MemoryStream(rawBytes))
-            using (var sr = new StreamReader(ms, Encoding.UTF8, detectEncodingFromByteOrderMarks: true))
+            // 2. 略過 UTF-8 BOM 與前導空白，檢查第一個有效字元是否為 '{' (JSON 封裝格式，如 K.496 與 K.545)
+            int firstNonWs = -1;
+            int b;
+            while ((b = fs.ReadByte()) != -1)
             {
-                text = sr.ReadToEnd();
+                if (b is 0xEF or 0xBB or 0xBF or ' ' or '\t' or '\r' or '\n')
+                    continue;
+                firstNonWs = b;
+                break;
             }
+            fs.Position = 0;
 
-            string trimmed = text.TrimStart();
-            if (trimmed.StartsWith("{"))
+            if (firstNonWs == '{')
             {
-                using var jdoc = JsonDocument.Parse(trimmed);
+                using var jdoc = JsonDocument.Parse(fs);
                 var root = jdoc.RootElement;
 
                 string xml = root.TryGetProperty("musicxml", out var mxProp)
@@ -1438,10 +1466,18 @@ namespace WinMusicXmlPlayer.Services
                 }
 
                 if (!string.IsNullOrWhiteSpace(xml))
-                    return (xml, title, subtitle, composer, tempo);
+                {
+                    using var sr = new StringReader(xml);
+                    using var xr = XmlReader.Create(sr, settings);
+                    return (XDocument.Load(xr), title, subtitle, composer, tempo);
+                }
             }
 
-            return (text, null, null, null, null);
+            // 3. 標準未壓縮 .musicxml / .xml：直接將 FileStream 串流交由 XmlReader 解析，零中間大字串配置
+            using (var xr = XmlReader.Create(fs, settings))
+            {
+                return (XDocument.Load(xr), null, null, null, null);
+            }
         }
 
         private static string FirstNonEmpty(params string?[] values)

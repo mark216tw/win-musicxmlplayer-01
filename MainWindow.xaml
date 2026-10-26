@@ -194,6 +194,10 @@
                           Style="{StaticResource SystemMenuItemStyle}"
                           PreviewMouseLeftButtonDown="TopMenuItem_PreviewMouseLeftButtonDown"
                           MouseEnter="TopMenuItem_MouseEnter">
+                    <MenuItem Header="音源設定與下載建議 (Ctrl+M)"
+                              Style="{StaticResource SystemMenuItemStyle}"
+                              Click="MenuSoundFontSettings_Click"/>
+                    <Separator Style="{StaticResource SystemMenuSeparatorStyle}"/>
                     <MenuItem Header="偏好設定 (Ctrl+P)"
                               Style="{StaticResource SystemMenuItemStyle}"
                               Click="MenuPreferences_Click"/>

@@ -25,6 +25,7 @@ flowchart TD
         MW["MainWindow (主視窗 / 系統選單 / 混音面板)"]
         PR["PianoRollControl (雙模式鋼琴卷軸 - OnRender 向量繪圖)"]
         PK["PianoKeyboardControl (88 鍵動態鋼琴 - OnRender 向量繪圖)"]
+        SW["SoundFontWindow (雙槽音源分流設定與下載建議視窗)"]
         PW["PreferencesWindow (偏好設定視窗)"]
         AW["AboutWindow (關於視窗)"]
     end
@@ -54,6 +55,8 @@ flowchart TD
     MW --> TM
     MW --> PR
     MW --> PK
+    SW --> AE
+    SW --> TM
     PW --> TM
     AW --> AE
 
@@ -78,12 +81,15 @@ flowchart TD
 - **多聲部智慧拆分**：當單一 Part 包含多個譜表（如鋼琴高音譜表 `staff=1` 與低音譜表 `staff=2`）或同譜表多聲部旋律時，自動拆分為獨立的 `ScorePartTrack` 並分配獨立 MIDI Channel（跳過 Channel 9 鼓組通道）。
 - **演奏表情與裝飾音合成**：將斷奏（Staccato）、跳音（Staccatissimo）、保持音（Tenuto）、連音線（Tie）、圓滑線（Slur）、琶音（Arpeggiate）與裝飾音（Trill、Mordent、Turn、Grace Note）轉換為精確的 `NoteEvent` 序列。
 
-### 3.2 `Services/AudioEngine.cs` — 低延遲即時音訊合成引擎
+### 3.2 `Services/AudioEngine.cs` — 低延遲雙槽分流音訊合成引擎
 - 實作 NAudio 的 `ISampleProvider` 介面，輸出格式固定為 **44,100 Hz / 2 Channels / IEEE 32-bit Float**。
+- **雙合成器路由與同步混音 (Dual-Synthesizer Routing & Mixing)**：
+  - 內部維護兩套獨立的 `MeltySynth.Synthesizer`：通用樂器合成器 `_synth` 與鋼琴專用合成器 `_pianoSynth`。
+  - 當使用者載入鋼琴專用 `.sf2` 音源時，所有 `GmProgram` 屬於 `0..5`（鋼琴家族）的聲部自動路由至 `_pianoSynth`，其餘樂器路由至 `_synth`；並具備智慧 Preset 映射（`ResolvePresetForSoundFont`），自動相容僅含單一 Preset (`Bank 0, Patch 0`) 的高階鋼琴音源。
 - **64-Frame 微區塊排程 (Sub-block Sample-Accurate Scheduling)**：
   - 在 `Read(float[] buffer, int offset, int count)` 音訊執行緒迴圈中，每次以 **64 frames（約 1.45 ms）** 為單位推進時間 `_currentTimeSec`。
-  - 先掃描 `_activeNotes` 佇列，將到達 `AudioEndTimeSeconds` 的音符準時送出 `NoteOff`；再以指標 `_nextNoteIndex` 觸發進入時間區間的新音符 `NoteOn`。
-  - 呼叫 `_synth.Render(...)` 產生左右聲道浮點取樣並交錯寫入輸出緩衝區，確保音符觸發精準度達毫秒等級，無 Timer 抖動（Jitter）。
+  - 先掃描 `_activeNotes` 佇列，將到達 `AudioEndTimeSeconds` 的音符向其所屬合成器準時送出 `NoteOff`；再以指標 `_nextNoteIndex` 觸發進入時間區間的新音符 `NoteOn`。
+  - 同步呼叫 `_synth.Render(...)` 與 `_pianoSynth.Render(...)` 產生左右聲道浮點取樣並進行立體聲疊加與防爆音處理，確保音符觸發精準度達毫秒等級，無 Timer 抖動（Jitter）。
 - **低延遲輸出策略**：優先初始化 `WasapiOut(AudioClientShareMode.Shared, useEventSync: true, latency: 35ms)`；若環境不支援則自動降級至 `WaveOutEvent(DesiredLatency = 55ms)`。
 
 ### 3.3 `Controls/PianoRollControl.cs` & `PianoKeyboardControl.cs` — 硬體加速向量繪圖

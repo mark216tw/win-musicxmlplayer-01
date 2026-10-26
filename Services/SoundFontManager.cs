@@ -170,6 +170,29 @@ namespace WinMusicXmlPlayer.Services
         }
 
         /// <summary>
+        /// 尋找內建 TimGM6mb.sf2 音源路徑
+        /// </summary>
+        public static string? FindBuiltInTimGmSoundFontPath()
+        {
+            string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+            string workDir = Directory.GetCurrentDirectory();
+
+            string[] candidates = new[]
+            {
+                Path.Combine(baseDir, "Assets", "SoundFonts", "TimGM6mb.sf2"),
+                Path.Combine(workDir, "Assets", "SoundFonts", "TimGM6mb.sf2"),
+                Path.Combine(baseDir, "TimGM6mb.sf2"),
+                Path.Combine(workDir, "TimGM6mb.sf2")
+            };
+
+            foreach (string path in candidates)
+            {
+                if (File.Exists(path)) return path;
+            }
+            return null;
+        }
+
+        /// <summary>
         /// 尋找預設 .sf2 音源路徑
         /// </summary>
         public static string? FindDefaultSoundFontPath()

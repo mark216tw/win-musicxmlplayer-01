@@ -14,17 +14,26 @@ namespace WinMusicXmlPlayer.Services
         private readonly int _sampleRate = 44100;
         private readonly WaveFormat _waveFormat;
 
+        // 通用樂器音源 (General MIDI SoundFont)
         private SoundFont? _soundFont;
         private Synthesizer? _synth;
+        private string _currentSoundFontPath = string.Empty;
+
+        // 鋼琴專用音源 (Dedicated Piano SoundFont - 方案 A)
+        private SoundFont? _pianoSoundFont;
+        private Synthesizer? _pianoSynth;
+        private string _pianoSoundFontPath = string.Empty;
+
         private IWavePlayer? _waveOut;
 
         private MusicScore? _score;
         private List<NoteEvent> _notes = new();
         private int _nextNoteIndex = 0;
 
-        // 追蹤目前正在發聲的音符以便準時送出 NoteOff
+        // 追蹤目前正在發聲的音符以便準時送出 NoteOff 至對應的合成器
         private struct ActiveNote
         {
+            public bool IsPianoSynth;
             public int Channel;
             public int Pitch;
             public double OffTimeSec;
@@ -37,19 +46,25 @@ namespace WinMusicXmlPlayer.Services
         private double _currentTimeSec;
         private double _playbackSpeed = 1.0;
         private double _masterVolume = 1.25;
-        private string _currentSoundFontPath = string.Empty;
 
-        // Interleaved Render 緩衝區
+        // Interleaved Render 緩衝區 (通用合成器 + 鋼琴專用合成器混音緩衝)
         private readonly float[] _blockLeft = new float[64];
         private readonly float[] _blockRight = new float[64];
+        private readonly float[] _pianoLeft = new float[64];
+        private readonly float[] _pianoRight = new float[64];
 
         public WaveFormat WaveFormat => _waveFormat;
 
         public bool IsPlaying => _isPlaying;
         public double CurrentTimeSeconds => _currentTimeSec;
         public double TotalDurationSeconds => _score?.TotalDurationSeconds ?? 0.0;
+
         public string CurrentSoundFontPath => _currentSoundFontPath;
         public string CurrentSoundFontName => string.IsNullOrEmpty(_currentSoundFontPath) ? "未載入音源" : Path.GetFileName(_currentSoundFontPath);
+
+        public string PianoSoundFontPath => _pianoSoundFontPath;
+        public string PianoSoundFontName => string.IsNullOrEmpty(_pianoSoundFontPath) ? "未指定 (使用通用音源)" : Path.GetFileName(_pianoSoundFontPath);
+        public bool HasDedicatedPianoSoundFont => _pianoSynth != null && !string.IsNullOrEmpty(_pianoSoundFontPath);
 
         public double PlaybackSpeed
         {
@@ -63,12 +78,12 @@ namespace WinMusicXmlPlayer.Services
             set
             {
                 _masterVolume = Math.Clamp(value, 0.0, 2.0);
-                if (_synth != null)
+                lock (_syncLock)
                 {
-                    lock (_syncLock)
-                    {
+                    if (_synth != null)
                         _synth.MasterVolume = (float)(1.05 * _masterVolume);
-                    }
+                    if (_pianoSynth != null)
+                        _pianoSynth.MasterVolume = (float)(1.05 * _masterVolume);
                 }
             }
         }
@@ -78,6 +93,15 @@ namespace WinMusicXmlPlayer.Services
         public AudioEngine()
         {
             _waveFormat = WaveFormat.CreateIeeeFloatWaveFormat(_sampleRate, 2);
+        }
+
+        public string GetStatusSummaryText()
+        {
+            if (HasDedicatedPianoSoundFont)
+            {
+                return $"鋼琴：{PianoSoundFontName} ｜ 其他樂器：{CurrentSoundFontName}";
+            }
+            return $"目前音源：{CurrentSoundFontName} (真實樂器取樣)";
         }
 
         public bool LoadSoundFont(string sf2Path, out string errorMessage)
@@ -105,6 +129,7 @@ namespace WinMusicXmlPlayer.Services
                 lock (_syncLock)
                 {
                     _synth?.NoteOffAll(true);
+                    _pianoSynth?.NoteOffAll(true);
                     _activeNotes.Clear();
                     _soundFont = newSf;
                     _synth = newSynth;
@@ -117,9 +142,105 @@ namespace WinMusicXmlPlayer.Services
             }
             catch (Exception ex)
             {
-                errorMessage = $"載入 SF2 音源失敗：{ex.Message}";
+                errorMessage = $"載入通用 SF2 音源失敗：{ex.Message}";
                 return false;
             }
+        }
+
+        public bool LoadPianoSoundFont(string sf2Path, out string errorMessage)
+        {
+            errorMessage = string.Empty;
+            try
+            {
+                if (!File.Exists(sf2Path))
+                {
+                    errorMessage = $"找不到鋼琴音源檔案：{sf2Path}";
+                    return false;
+                }
+
+                var newSf = new SoundFont(sf2Path);
+                var settings = new SynthesizerSettings(_sampleRate)
+                {
+                    EnableReverbAndChorus = true,
+                    MaximumPolyphony = 128
+                };
+                var newSynth = new Synthesizer(newSf, settings)
+                {
+                    MasterVolume = (float)(1.05 * _masterVolume)
+                };
+
+                lock (_syncLock)
+                {
+                    _synth?.NoteOffAll(true);
+                    _pianoSynth?.NoteOffAll(true);
+                    _activeNotes.Clear();
+                    _pianoSoundFont = newSf;
+                    _pianoSynth = newSynth;
+                    _pianoSoundFontPath = sf2Path;
+                    ApplyTrackProgramsAndControllersLocked();
+                }
+
+                EnsureWavePlayerInitialized();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                errorMessage = $"載入鋼琴專用 SF2 音源失敗：{ex.Message}";
+                return false;
+            }
+        }
+
+        public void ClearPianoSoundFont()
+        {
+            lock (_syncLock)
+            {
+                _synth?.NoteOffAll(true);
+                _pianoSynth?.NoteOffAll(true);
+                _activeNotes.Clear();
+                _pianoSoundFont = null;
+                _pianoSynth = null;
+                _pianoSoundFontPath = string.Empty;
+                ApplyTrackProgramsAndControllersLocked();
+            }
+        }
+
+        /// <summary>
+        /// 判斷指定聲部是否應路由至「鋼琴專用合成器」
+        /// (GM Program 0..5 為傳統鋼琴/電鋼琴家族)
+        /// </summary>
+        private bool ShouldRouteToPianoSynthLocked(ScorePartTrack track)
+        {
+            return _pianoSynth != null && _pianoSoundFont != null && track.GmProgram is >= 0 and <= 5;
+        }
+
+        /// <summary>
+        /// 針對專用音源進行智慧 Preset 映射：若該 .sf2 僅含單一鋼琴 Preset (如 Bank 0, Patch 0)，自動 Fallback 至第一個可用 Preset
+        /// </summary>
+        private static (int bank, int patch) ResolvePresetForSoundFont(SoundFont? sf, int requestedProgram)
+        {
+            int targetProg = Math.Clamp(requestedProgram, 0, 127);
+            if (sf?.Presets == null)
+                return (0, targetProg);
+
+            bool hasBank0Patch0 = false;
+            Preset? firstPreset = null;
+
+            foreach (var p in sf.Presets)
+            {
+                firstPreset ??= p;
+                if (p.BankNumber == 0 && p.PatchNumber == targetProg)
+                    return (0, targetProg);
+                if (p.BankNumber == 0 && p.PatchNumber == 0)
+                    hasBank0Patch0 = true;
+            }
+
+            if (hasBank0Patch0)
+                return (0, 0);
+
+            if (firstPreset != null)
+                return (firstPreset.BankNumber, firstPreset.PatchNumber);
+
+            return (0, targetProg);
         }
 
         private void EnsureWavePlayerInitialized()
@@ -154,6 +275,7 @@ namespace WinMusicXmlPlayer.Services
             {
                 _isPlaying = false;
                 _synth?.NoteOffAll(false);
+                _pianoSynth?.NoteOffAll(false);
                 _activeNotes.Clear();
 
                 _score = score;
@@ -171,7 +293,7 @@ namespace WinMusicXmlPlayer.Services
             {
                 ApplyTrackProgramsAndControllersLocked();
 
-                if (_score == null || _synth == null) return;
+                if (_score == null) return;
                 bool anySolo = _score.Tracks.Any(t => t.IsSolo);
 
                 for (int i = _activeNotes.Count - 1; i >= 0; i--)
@@ -181,9 +303,11 @@ namespace WinMusicXmlPlayer.Services
                     {
                         var tr = _score.Tracks[an.TrackIndex];
                         bool audible = !tr.IsMuted && (!anySolo || tr.IsSolo) && tr.Volume > 0.001;
-                        if (!audible)
+                        bool routeChanged = ShouldRouteToPianoSynthLocked(tr) != an.IsPianoSynth;
+                        if (!audible || routeChanged)
                         {
-                            _synth.NoteOff(an.Channel, an.Pitch);
+                            var targetSynth = an.IsPianoSynth ? _pianoSynth : _synth;
+                            targetSynth?.NoteOff(an.Channel, an.Pitch);
                             _activeNotes.RemoveAt(i);
                         }
                     }
@@ -193,26 +317,38 @@ namespace WinMusicXmlPlayer.Services
 
         private void ApplyTrackProgramsAndControllersLocked()
         {
-            if (_synth == null || _score == null) return;
+            if (_score == null) return;
 
             foreach (var track in _score.Tracks)
             {
                 int ch = Math.Clamp(track.MidiChannel, 0, 15);
-                // Bank 0
-                _synth.ProcessMidiMessage(ch, 0xB0, 0x00, 0);
-                _synth.ProcessMidiMessage(ch, 0xB0, 0x20, 0);
-                // Program Change
-                _synth.ProcessMidiMessage(ch, 0xC0, Math.Clamp(track.GmProgram, 0, 127), 0);
-                // Pan (CC 10)
-                _synth.ProcessMidiMessage(ch, 0xB0, 10, Math.Clamp(track.Pan, 0, 127));
-                // Expression (CC 11)
-                _synth.ProcessMidiMessage(ch, 0xB0, 11, 127);
-                // Reverb Send (CC 91) & Chorus Send (CC 93)
-                _synth.ProcessMidiMessage(ch, 0xB0, 91, 52);
-                _synth.ProcessMidiMessage(ch, 0xB0, 93, 18);
-                // Channel Volume (CC 7)
                 int ccVol = (int)Math.Clamp(Math.Round(115.0 * track.Volume), 0, 127);
-                _synth.ProcessMidiMessage(ch, 0xB0, 7, ccVol);
+
+                if (_synth != null)
+                {
+                    var (bank, patch) = ResolvePresetForSoundFont(_soundFont, track.GmProgram);
+                    _synth.ProcessMidiMessage(ch, 0xB0, 0x00, bank);
+                    _synth.ProcessMidiMessage(ch, 0xB0, 0x20, 0);
+                    _synth.ProcessMidiMessage(ch, 0xC0, patch, 0);
+                    _synth.ProcessMidiMessage(ch, 0xB0, 10, Math.Clamp(track.Pan, 0, 127));
+                    _synth.ProcessMidiMessage(ch, 0xB0, 11, 127);
+                    _synth.ProcessMidiMessage(ch, 0xB0, 91, 52);
+                    _synth.ProcessMidiMessage(ch, 0xB0, 93, 18);
+                    _synth.ProcessMidiMessage(ch, 0xB0, 7, ccVol);
+                }
+
+                if (_pianoSynth != null)
+                {
+                    var (pBank, pPatch) = ResolvePresetForSoundFont(_pianoSoundFont, track.GmProgram);
+                    _pianoSynth.ProcessMidiMessage(ch, 0xB0, 0x00, pBank);
+                    _pianoSynth.ProcessMidiMessage(ch, 0xB0, 0x20, 0);
+                    _pianoSynth.ProcessMidiMessage(ch, 0xC0, pPatch, 0);
+                    _pianoSynth.ProcessMidiMessage(ch, 0xB0, 10, Math.Clamp(track.Pan, 0, 127));
+                    _pianoSynth.ProcessMidiMessage(ch, 0xB0, 11, 127);
+                    _pianoSynth.ProcessMidiMessage(ch, 0xB0, 91, 52);
+                    _pianoSynth.ProcessMidiMessage(ch, 0xB0, 93, 18);
+                    _pianoSynth.ProcessMidiMessage(ch, 0xB0, 7, ccVol);
+                }
             }
         }
 
@@ -237,6 +373,7 @@ namespace WinMusicXmlPlayer.Services
             {
                 _isPlaying = false;
                 _synth?.NoteOffAll(false);
+                _pianoSynth?.NoteOffAll(false);
                 _activeNotes.Clear();
             }
         }
@@ -247,6 +384,7 @@ namespace WinMusicXmlPlayer.Services
             {
                 _isPlaying = false;
                 _synth?.NoteOffAll(false);
+                _pianoSynth?.NoteOffAll(false);
                 _activeNotes.Clear();
                 SeekInternalLocked(0.0);
             }
@@ -266,6 +404,7 @@ namespace WinMusicXmlPlayer.Services
             _currentTimeSec = Math.Clamp(timeSeconds, 0.0, maxDur);
 
             _synth?.NoteOffAll(false);
+            _pianoSynth?.NoteOffAll(false);
             _activeNotes.Clear();
 
             if (_notes.Count == 0)
@@ -274,7 +413,6 @@ namespace WinMusicXmlPlayer.Services
                 return;
             }
 
-            // 二分搜尋第一個 StartTimeSeconds >= _currentTimeSec 的音符
             int lo = 0;
             int hi = _notes.Count - 1;
             int found = _notes.Count;
@@ -303,7 +441,7 @@ namespace WinMusicXmlPlayer.Services
 
             lock (_syncLock)
             {
-                if (_synth == null)
+                if (_synth == null && _pianoSynth == null)
                 {
                     Array.Clear(buffer, offset, count);
                     return count;
@@ -323,7 +461,9 @@ namespace WinMusicXmlPlayer.Services
                         {
                             if (_activeNotes[i].OffTimeSec <= blockEndTime)
                             {
-                                _synth.NoteOff(_activeNotes[i].Channel, _activeNotes[i].Pitch);
+                                var an = _activeNotes[i];
+                                var targetSynth = an.IsPianoSynth ? _pianoSynth : _synth;
+                                targetSynth?.NoteOff(an.Channel, an.Pitch);
                                 _activeNotes.RemoveAt(i);
                             }
                         }
@@ -350,27 +490,34 @@ namespace WinMusicXmlPlayer.Services
                                 bool audible = !track.IsMuted && (!anySolo || track.IsSolo) && track.Volume > 0.001;
                                 if (audible)
                                 {
-                                    int ch = Math.Clamp(track.MidiChannel, 0, 15);
-                                    int vel = (int)Math.Clamp(Math.Round(note.Velocity * Math.Min(1.25, track.Volume)), 1, 127);
-
-                                    // 若同通道同音高仍在響，先釋放再重新觸鍵
-                                    for (int a = _activeNotes.Count - 1; a >= 0; a--)
+                                    bool usePianoSynth = ShouldRouteToPianoSynthLocked(track);
+                                    var targetSynth = usePianoSynth ? _pianoSynth : _synth;
+                                    if (targetSynth != null)
                                     {
-                                        if (_activeNotes[a].Channel == ch && _activeNotes[a].Pitch == note.MidiPitch)
+                                        int ch = Math.Clamp(track.MidiChannel, 0, 15);
+                                        int vel = (int)Math.Clamp(Math.Round(note.Velocity * Math.Min(1.25, track.Volume)), 1, 127);
+
+                                        for (int a = _activeNotes.Count - 1; a >= 0; a--)
                                         {
-                                            _synth.NoteOff(ch, note.MidiPitch);
-                                            _activeNotes.RemoveAt(a);
+                                            if (_activeNotes[a].IsPianoSynth == usePianoSynth &&
+                                                _activeNotes[a].Channel == ch &&
+                                                _activeNotes[a].Pitch == note.MidiPitch)
+                                            {
+                                                targetSynth.NoteOff(ch, note.MidiPitch);
+                                                _activeNotes.RemoveAt(a);
+                                            }
                                         }
-                                    }
 
-                                    _synth.NoteOn(ch, note.MidiPitch, vel);
-                                    _activeNotes.Add(new ActiveNote
-                                    {
-                                        Channel = ch,
-                                        Pitch = note.MidiPitch,
-                                        OffTimeSec = note.AudioEndTimeSeconds,
-                                        TrackIndex = note.TrackIndex
-                                    });
+                                        targetSynth.NoteOn(ch, note.MidiPitch, vel);
+                                        _activeNotes.Add(new ActiveNote
+                                        {
+                                            IsPianoSynth = usePianoSynth,
+                                            Channel = ch,
+                                            Pitch = note.MidiPitch,
+                                            OffTimeSec = note.AudioEndTimeSeconds,
+                                            TrackIndex = note.TrackIndex
+                                        });
+                                    }
                                 }
                             }
                         }
@@ -384,7 +531,25 @@ namespace WinMusicXmlPlayer.Services
                         }
                     }
 
-                    _synth.Render(_blockLeft.AsSpan(0, blockFrames), _blockRight.AsSpan(0, blockFrames));
+                    if (_synth != null)
+                    {
+                        _synth.Render(_blockLeft.AsSpan(0, blockFrames), _blockRight.AsSpan(0, blockFrames));
+                    }
+                    else
+                    {
+                        Array.Clear(_blockLeft, 0, blockFrames);
+                        Array.Clear(_blockRight, 0, blockFrames);
+                    }
+
+                    if (_pianoSynth != null)
+                    {
+                        _pianoSynth.Render(_pianoLeft.AsSpan(0, blockFrames), _pianoRight.AsSpan(0, blockFrames));
+                        for (int f = 0; f < blockFrames; f++)
+                        {
+                            _blockLeft[f] += _pianoLeft[f];
+                            _blockRight[f] += _pianoRight[f];
+                        }
+                    }
 
                     for (int f = 0; f < blockFrames; f++)
                     {

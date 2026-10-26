@@ -43,6 +43,8 @@ namespace WinMusicXmlPlayer.Services
         public double ThemeHue { get; set; } = 199.0;
         public int SelectedPresetIndex { get; set; } = 0;
         public string LastOpenedDirectory { get; set; } = string.Empty;
+        public string GeneralSoundFontPath { get; set; } = string.Empty;
+        public string PianoSoundFontPath { get; set; } = string.Empty;
     }
 
     public static class ThemeManager
@@ -59,6 +61,8 @@ namespace WinMusicXmlPlayer.Services
         private static double _currentHue = 199.0;
         private static int _selectedPresetIndex = 0;
         private static string _lastOpenedDirectory = string.Empty;
+        private static string _generalSoundFontPath = string.Empty;
+        private static string _pianoSoundFontPath = string.Empty;
         private static Color _currentAccentColor = ColorFromHue(199.0);
         private static bool _isDarkEffective = true;
         private static bool _systemHooked;
@@ -69,6 +73,8 @@ namespace WinMusicXmlPlayer.Services
         public static double CurrentHue => _currentHue;
         public static int SelectedPresetIndex => _selectedPresetIndex;
         public static string LastOpenedDirectory => _lastOpenedDirectory;
+        public static string GeneralSoundFontPath => _generalSoundFontPath;
+        public static string PianoSoundFontPath => _pianoSoundFontPath;
         public static Color CurrentAccentColor => _currentAccentColor;
         public static bool IsDarkMode => _isDarkEffective;
 
@@ -160,6 +166,18 @@ namespace WinMusicXmlPlayer.Services
         {
             if (string.IsNullOrWhiteSpace(directoryPath) || !Directory.Exists(directoryPath)) return;
             _lastOpenedDirectory = directoryPath;
+            SavePreferences();
+        }
+
+        public static void SetGeneralSoundFontPath(string? sf2Path)
+        {
+            _generalSoundFontPath = sf2Path ?? string.Empty;
+            SavePreferences();
+        }
+
+        public static void SetPianoSoundFontPath(string? sf2Path)
+        {
+            _pianoSoundFontPath = sf2Path ?? string.Empty;
             SavePreferences();
         }
 
@@ -587,6 +605,14 @@ namespace WinMusicXmlPlayer.Services
                     {
                         _lastOpenedDirectory = data.LastOpenedDirectory;
                     }
+                    if (!string.IsNullOrWhiteSpace(data.GeneralSoundFontPath) && File.Exists(data.GeneralSoundFontPath))
+                    {
+                        _generalSoundFontPath = data.GeneralSoundFontPath;
+                    }
+                    if (!string.IsNullOrWhiteSpace(data.PianoSoundFontPath) && File.Exists(data.PianoSoundFontPath))
+                    {
+                        _pianoSoundFontPath = data.PianoSoundFontPath;
+                    }
                 }
             }
             catch
@@ -607,7 +633,9 @@ namespace WinMusicXmlPlayer.Services
                     WindowStyle = _windowStyle,
                     ThemeHue = _currentHue,
                     SelectedPresetIndex = _selectedPresetIndex,
-                    LastOpenedDirectory = _lastOpenedDirectory
+                    LastOpenedDirectory = _lastOpenedDirectory,
+                    GeneralSoundFontPath = _generalSoundFontPath,
+                    PianoSoundFontPath = _pianoSoundFontPath
                 };
                 string json = JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
                 File.WriteAllText(PreferencesFilePath, json);

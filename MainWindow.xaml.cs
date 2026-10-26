@@ -70,15 +70,22 @@ namespace WinMusicXmlPlayer
 
         private void MainWindow_Loaded(object sender, RoutedEventArgs e)
         {
-            // 1. 載入預設真實取樣 SoundFont (.sf2)
-            string? sf2Path = SoundFontManager.FindDefaultSoundFontPath();
-            if (!string.IsNullOrEmpty(sf2Path) && _audioEngine.LoadSoundFont(sf2Path, out string err))
+            // 1. 載入通用樂器 SoundFont (.sf2) 與選用的鋼琴專用 SoundFont (.sf2)
+            string? sf2Path = !string.IsNullOrWhiteSpace(ThemeManager.GeneralSoundFontPath) && File.Exists(ThemeManager.GeneralSoundFontPath)
+                ? ThemeManager.GeneralSoundFontPath
+                : SoundFontManager.FindDefaultSoundFontPath();
+
+            if (!string.IsNullOrEmpty(sf2Path) && _audioEngine.LoadSoundFont(sf2Path, out string _))
             {
-                TxtSoundFontStatus.Text = $"目前音源：{_audioEngine.CurrentSoundFontName} (真實樂器取樣)";
+                if (!string.IsNullOrWhiteSpace(ThemeManager.PianoSoundFontPath) && File.Exists(ThemeManager.PianoSoundFontPath))
+                {
+                    _audioEngine.LoadPianoSoundFont(ThemeManager.PianoSoundFontPath, out string _);
+                }
+                TxtSoundFontStatus.Text = _audioEngine.GetStatusSummaryText();
             }
             else
             {
-                TxtSoundFontStatus.Text = "目前音源：尚未載入 .sf2 音源檔（請點擊右上角載入）";
+                TxtSoundFontStatus.Text = "目前音源：尚未載入 .sf2 音源檔（請點擊右上角設定音源）";
             }
 
             UpdateViewModeButtonVisual(PianoRoll.ViewMode);
@@ -371,6 +378,12 @@ namespace WinMusicXmlPlayer
                     MenuExit_Click(this, new RoutedEventArgs());
                     return;
                 }
+                if (key == Key.M)
+                {
+                    e.Handled = true;
+                    MenuSoundFontSettings_Click(this, new RoutedEventArgs());
+                    return;
+                }
                 if (key == Key.P || key == Key.OemComma)
                 {
                     e.Handled = true;
@@ -414,6 +427,19 @@ namespace WinMusicXmlPlayer
             Close();
         }
 
+        private void MenuSoundFontSettings_Click(object sender, RoutedEventArgs e)
+        {
+            CloseOtherTopMenus(null);
+            var dlg = new SoundFontWindow(_audioEngine, () =>
+            {
+                TxtSoundFontStatus.Text = _audioEngine.GetStatusSummaryText();
+            })
+            {
+                Owner = this
+            };
+            dlg.ShowDialog();
+        }
+
         private void MenuPreferences_Click(object sender, RoutedEventArgs e)
         {
             CloseOtherTopMenus(null);
@@ -437,6 +463,11 @@ namespace WinMusicXmlPlayer
 
         private void BtnOpenFile_Click(object sender, RoutedEventArgs e)
         {
+            PromptAndLoadMusicXml(autoPlay: false);
+        }
+
+        private bool PromptAndLoadMusicXml(bool autoPlay)
+        {
             CloseOtherTopMenus(null);
             var dlg = new OpenFileDialog
             {
@@ -447,8 +478,10 @@ namespace WinMusicXmlPlayer
 
             if (dlg.ShowDialog(this) == true)
             {
-                LoadMusicXmlFile(dlg.FileName, autoPlay: false);
+                LoadMusicXmlFile(dlg.FileName, autoPlay: autoPlay);
+                return _currentScore != null;
             }
+            return false;
         }
 
         private void ChkExpandRepeats_Changed(object sender, RoutedEventArgs e)
@@ -485,23 +518,7 @@ namespace WinMusicXmlPlayer
 
         private void BtnLoadSoundFont_Click(object sender, RoutedEventArgs e)
         {
-            var dlg = new OpenFileDialog
-            {
-                Title = "選擇 SoundFont 2 (.sf2) 真實樂器取樣音源檔",
-                Filter = "SoundFont 2 音源檔 (*.sf2)|*.sf2|所有檔案 (*.*)|*.*"
-            };
-
-            if (dlg.ShowDialog(this) == true)
-            {
-                if (_audioEngine.LoadSoundFont(dlg.FileName, out string err))
-                {
-                    TxtSoundFontStatus.Text = $"目前音源：{_audioEngine.CurrentSoundFontName} (真實樂器取樣)";
-                }
-                else
-                {
-                    MessageBox.Show(this, err, "音源載入失敗", MessageBoxButton.OK, MessageBoxImage.Warning);
-                }
-            }
+            MenuSoundFontSettings_Click(sender, e);
         }
 
         // ==================== 左側聲部控制事件與 Toast 浮動訊息 ====================
@@ -584,7 +601,11 @@ namespace WinMusicXmlPlayer
 
         private void BtnPlayPause_Click(object sender, RoutedEventArgs e)
         {
-            if (_currentScore == null) return;
+            if (_currentScore == null)
+            {
+                PromptAndLoadMusicXml(autoPlay: true);
+                return;
+            }
 
             if (_audioEngine.IsPlaying)
             {

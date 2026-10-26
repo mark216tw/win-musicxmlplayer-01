@@ -15,6 +15,7 @@
 | `Measures` | `List<MeasureMarker>` | 展開反覆記號後的線性小節時間軸標記清單 |
 | `TotalDurationSeconds` | `double` | 樂曲總時長（秒） |
 | `MinMidiPitch` / `MaxMidiPitch` | `int` | 全曲最低與最高 MIDI 音高（用於水平卷軸自動計算最佳垂直音域範圍） |
+| `MaxEndTimePrefix` | `double[]` | 前綴最大結束時間陣列，提供 `FindFirstNoteIndexForWindow` 與 `FindMeasureAt` 進行 $O(\log N)$ 二分搜尋 |
 
 ### 1.2 `ScorePartTrack`（聲部軌道模型）
 實作 `INotifyPropertyChanged` 以支援 WPF 資料繫結：
@@ -22,7 +23,8 @@
 - **音色與混音狀態**：
   - `GmProgram` (`0..127`) 與 `InitialGmProgram`（記錄初始推斷音色，供「重置」按鈕還原）。
   - `Pan` (`0..127`，`64` 為正中央)：依據樂器家族自動配置交響樂團立體聲座位（例如第一小提琴偏左 `36`、第二小提琴偏右 `76`、中提琴 `82`、大提琴 `92`、鋼琴右手微偏右 `72`、左手微偏左 `54`）。
-  - `Volume` (`0.0..1.5`)、`IsMuted`、`IsSolo`、`IsVisibleOnRoll`。
+  - `Volume` (`0.0..1.5`，自動以 `0.05` 即 `5%` 為單位對齊)、`IsMuted`、`IsSolo`、`IsVisibleOnRoll`。
+  - `AlphaBrushCache` (`SolidColorBrush[256]`)：預先凍結之 256 階透明度聲部色彩查表，供卷軸與鍵盤渲染零配置取用。
   - `CurrentActivity` (`0.0..1.0`)：即時發聲強度，採用快攻慢衰（Fast-Attack / Exponential-Decay）平滑演算法驅動 UI 動態條。
 
 ### 1.3 `NoteEvent`（雙時長音符事件模型）

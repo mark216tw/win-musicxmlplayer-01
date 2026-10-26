@@ -86,17 +86,20 @@ flowchart TD
 - **雙合成器路由與同步混音 (Dual-Synthesizer Routing & Mixing)**：
   - 內部維護兩套獨立的 `MeltySynth.Synthesizer`：通用樂器合成器 `_synth` 與鋼琴專用合成器 `_pianoSynth`。
   - 當使用者載入鋼琴專用 `.sf2` 音源時，所有 `GmProgram` 屬於 `0..5`（鋼琴家族）的聲部自動路由至 `_pianoSynth`，其餘樂器路由至 `_synth`；並具備智慧 Preset 映射（`ResolvePresetForSoundFont`），自動相容僅含單一 Preset (`Bank 0, Patch 0`) 的高階鋼琴音源。
-- **64-Frame 微區塊排程 (Sub-block Sample-Accurate Scheduling)**：
-  - 在 `Read(float[] buffer, int offset, int count)` 音訊執行緒迴圈中，每次以 **64 frames（約 1.45 ms）** 為單位推進時間 `_currentTimeSec`。
-  - 先掃描 `_activeNotes` 佇列，將到達 `AudioEndTimeSeconds` 的音符向其所屬合成器準時送出 `NoteOff`；再以指標 `_nextNoteIndex` 觸發進入時間區間的新音符 `NoteOn`。
-  - 同步呼叫 `_synth.Render(...)` 與 `_pianoSynth.Render(...)` 產生左右聲道浮點取樣並進行立體聲疊加與防爆音處理，確保音符觸發精準度達毫秒等級，無 Timer 抖動（Jitter）。
-- **低延遲輸出策略**：優先初始化 `WasapiOut(AudioClientShareMode.Shared, useEventSync: true, latency: 35ms)`；若環境不支援則自動降級至 `WaveOutEvent(DesiredLatency = 55ms)`。
+- **64-Frame 微區塊排程、A-B 區間循環與消爆音微淡出 (Anti-Click Micro-Fade)**：
+  - 在 `Read(float[] buffer, int offset, int count)` 音訊執行緒迴圈中，每次以 **64 frames（約 1.45 ms）** 為單位推進時間 `_currentTimeSec`，並透過 `Interlocked` 原子更新時間供 UI 執行緒無鎖讀取。
+  - 若啟用 A–B 區間循環（`IsLoopEnabled`），當播放時間抵達 `_loopEndSec` 時於音訊執行緒內部無縫跳回 `_loopStartSec`。
+  - 當發生 Seek 或靜音切換時，自動擷取最後輸出樣本並執行 64-sample 線性軟淡出（Soft Fade-Out），徹底消除波形不連續產生的爆音（Click/Pop）。
+  - 預先配置 `_leftBuf`、`_rightBuf` 與 `_pianoLeftBuf`、`_pianoRightBuf` 緩衝區，確保音訊執行緒零 GC 配置（Zero-Allocation）。
+- **離線高速 WAV 匯出 (`ExportToWavFile`)**：建立獨立離線雙合成器實例，以 2048-frame 區塊高速渲染全曲並寫入 44.1kHz / 16-bit PCM `.wav` 檔案。
 
-### 3.3 `Controls/PianoRollControl.cs` & `PianoKeyboardControl.cs` — 硬體加速向量繪圖
+### 3.3 `Controls/PianoRollControl.cs` & `PianoKeyboardControl.cs` — 零配置硬體加速向量繪圖
 - 兩者皆直接繼承自 `FrameworkElement` 並覆寫 `OnRender(DrawingContext dc)`，避免傳統 WPF 為數千個音符建立 `Border` / `Rectangle` 視覺樹節點所造成的記憶體暴增與 Layout 卡頓。
-- **`O(log N)` 二分搜尋視窗裁剪 (`FindFirstNoteIndexBefore`)**：
-  - 樂譜總音符數可達數千至數萬顆；每次 `OnRender` 時透過二分搜尋在 `O(log N)` 時間內定位目前可見時間視窗（`viewStartSec` ~ `viewEndSec`）的起始音符索引，僅繪製畫面可見範圍內的音符。
-- **60FPS 畫面同步迴圈**：由 `MainWindow` 訂閱 `CompositionTarget.Rendering` 事件，在每一垂直同步幀讀取 `_audioEngine.CurrentTimeSeconds`，同步刷新鋼琴卷軸、88 鍵鋼琴、時間軸拉桿、小節/調號/BPM 狀態與各聲部動態音量表。
+- **`O(log N)` 前綴最大結束時間二分搜尋 (`FindFirstNoteIndexForWindow`)**：
+  - `MusicScore` 於載入時預先建立 `MaxEndTimePrefix[]` 前綴最大結束時間索引；每次 `OnRender` 或計算聲部動態表時，透過二分搜尋在 `O(log N)` 時間內精準定位目前可見時間視窗（`viewStartSec` ~ `viewEndSec`）的第一顆未結束音符，消除長時值音符回退掃描開銷。
+- **`FormattedText` 與凍結畫刷快取 (`Frozen Brush & Text Cache`)**：
+  - 預先快取小節編號、力度/演奏法標籤與琴鍵音名之 `FormattedText`，並預建 256 階透明度凍結 `SolidColorBrush` 查表，使 60FPS 畫面更新達到零配置（Zero-Allocation）。
+- **智慧休眠 60FPS 畫面同步迴圈**：由 `MainWindow` 訂閱 `CompositionTarget.Rendering` 事件，在暫停且動態表歸零時自動跳過重繪，閒置時 CPU 佔用趨近於 0%。
 
 ### 3.4 `Services/ThemeManager.cs` — 即時動態主題與原生 DWM 整合
 - 集中管理 `DisplayMode`（系統 / 淺色 / 深色）、`WindowStyle`（現代圓潤 / 專業俐落 / 主題炫彩 / 古典音樂廳）與 `CurrentHue`（`0°` ~ `360°` HSL 色彩空間轉換）。

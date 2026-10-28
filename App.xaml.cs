@@ -23,7 +23,7 @@ namespace WinMusicXmlPlayer
 
             if (e.Args.Any(a => string.Equals(a, "--capture-ui", StringComparison.OrdinalIgnoreCase)))
             {
-                var win = new MainWindow();
+                var win = new MainWindow { AutoLoadLastScore = false };
                 win.Show();
                 var files = Directory.GetFiles(Directory.GetCurrentDirectory(), "*.musicxml").OrderBy(f => f).ToList();
                 string outDir = @"C:\Users\STATUS\.gemini\antigravity\brain\9841aea9-af6e-4051-b038-e01f27520133";
@@ -138,7 +138,7 @@ namespace WinMusicXmlPlayer
                 sb.AppendLine("[PASS] Performance expression self-test (arpeggio/breath/humanize/vibrato/velocity) passed!");
 
                 // 測試 UI 選單展開、模式單一按鈕切換、重置按鈕隱藏/顯示與 Toast 訊息
-                var testWin = new MainWindow();
+                var testWin = new MainWindow { AutoLoadLastScore = false };
                 testWin.Show();
                 testWin.RunUiSelfTest(musicFiles[0]);
                 testWin.Close();

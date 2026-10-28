@@ -376,7 +376,7 @@
                                 VerticalAlignment="Center"/>
                         <TextBlock x:Name="TxtReverbValue"
                                    Grid.Column="2"
-                                   Text="40%"
+                                   Text="30%"
                                    FontSize="12"
                                    Foreground="{DynamicResource TextPrimaryBrush}"
                                    HorizontalAlignment="Right"
@@ -455,7 +455,7 @@
                                 VerticalAlignment="Center"/>
                         <TextBlock x:Name="TxtHumanizeValue"
                                    Grid.Column="2"
-                                   Text="0%"
+                                   Text="30%"
                                    FontSize="12"
                                    FontWeight="SemiBold"
                                    Foreground="{DynamicResource AccentPrimaryBrush}"
@@ -495,7 +495,7 @@
                                 VerticalAlignment="Center"/>
                         <TextBlock x:Name="TxtDynamicRangeValue"
                                    Grid.Column="2"
-                                   Text="100%"
+                                   Text="70%"
                                    FontSize="12"
                                    FontWeight="SemiBold"
                                    Foreground="{DynamicResource AccentPrimaryBrush}"

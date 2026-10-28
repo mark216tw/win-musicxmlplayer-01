@@ -29,9 +29,11 @@ namespace WinMusicXmlPlayer
         private int _lastTelemetrySpeedBpm = -1;
         private bool _metersActive;
         private bool _isMasterMuted;
-        private double _masterVolumeBeforeMute = 1.25;
+        private double _masterVolumeBeforeMute = 1.0;
         private int _loopState;
         private DispatcherTimer? _toastTimer;
+
+        public bool AutoLoadLastScore { get; set; } = true;
 
         public MainWindow()
         {
@@ -46,6 +48,7 @@ namespace WinMusicXmlPlayer
             PianoRoll.ScrubStarted += OnPianoRollScrubStarted;
             PianoRoll.TimeScrubbed += OnPianoRollTimeScrubbed;
             PianoRoll.ScrubEnded += OnPianoRollScrubEnded;
+            PianoRoll.PlayPauseToggleRequested += OnPianoRollPlayPauseToggleRequested;
             PianoRoll.LoopPointRightClicked += OnPianoRollLoopPointRightClicked;
             PianoRoll.VisibleWindowChanged += s => ThemeManager.SetLastVisibleWindowSeconds(s);
 
@@ -158,9 +161,33 @@ namespace WinMusicXmlPlayer
                 : PianoRollViewMode.HorizontalTimeline;
             SetPianoRollViewMode(savedMode, savePref: false);
             RefreshRecentFilesMenu();
+            SliderMasterVolume.Value = Math.Round(ThemeManager.MasterVolume * 20.0) / 20.0;
+            _audioEngine.MasterVolume = SliderMasterVolume.Value;
+            _audioEngine.ReverbAmount = ThemeManager.ReverbAmount;
+            _audioEngine.ChorusAmount = ThemeManager.ChorusAmount;
 
-            // 2. 預設不載入任何 MusicXML 樂譜，啟動 60FPS 畫面同步迴圈
+            // 2. 自動載入上次成功開啟的樂譜；檔案不存在時維持空白畫面
+            TryAutoLoadLastScore();
+
             CompositionTarget.Rendering += OnCompositionTargetRendering;
+        }
+
+        private void TryAutoLoadLastScore()
+        {
+            if (!AutoLoadLastScore || _currentScore != null) return;
+
+            string path = ThemeManager.LastOpenedScorePath;
+            if (string.IsNullOrWhiteSpace(path)) return;
+
+            try
+            {
+                if (!File.Exists(path)) return;
+                LoadMusicXmlFile(path, autoPlay: false, showErrorDialog: false);
+            }
+            catch
+            {
+                // 自動載入失敗時保持空白畫面，避免啟動時彈出錯誤對話框
+            }
         }
 
         private void MainWindow_Closed(object? sender, EventArgs e)
@@ -170,7 +197,7 @@ namespace WinMusicXmlPlayer
             _audioEngine.Dispose();
         }
 
-        public void LoadMusicXmlFile(string filePath, bool autoPlay = false)
+        public void LoadMusicXmlFile(string filePath, bool autoPlay = false, bool showErrorDialog = true)
         {
             try
             {
@@ -184,6 +211,8 @@ namespace WinMusicXmlPlayer
                 _currentFilePath = filePath;
                 ThemeManager.SetLastOpenedDirectory(Path.GetDirectoryName(Path.GetFullPath(filePath)));
                 ThemeManager.AddRecentFile(filePath);
+                if (AutoLoadLastScore)
+                    ThemeManager.SetLastOpenedScorePath(filePath);
                 RefreshRecentFilesMenu();
 
                 TxtScoreTitle.Text = string.IsNullOrWhiteSpace(score.Composer)
@@ -234,7 +263,10 @@ namespace WinMusicXmlPlayer
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, $"讀取 MusicXML 檔案失敗：\n{ex.Message}", "載入錯誤", MessageBoxButton.OK, MessageBoxImage.Error);
+                if (showErrorDialog)
+                    MessageBox.Show(this, $"讀取 MusicXML 檔案失敗：\n{ex.Message}", "載入錯誤", MessageBoxButton.OK, MessageBoxImage.Error);
+                else
+                    ShowToast($"自動載入上次樂譜失敗：{ex.Message}");
             }
         }
 
@@ -352,7 +384,14 @@ namespace WinMusicXmlPlayer
             if (_wasPlayingBeforeScrub)
             {
                 _audioEngine.Pause();
+                BtnPlayPause.Content = "▶ 播放";
             }
+        }
+
+        private void OnPianoRollPlayPauseToggleRequested()
+        {
+            if (_currentScore == null) return;
+            TogglePlayPause();
         }
 
         private void OnPianoRollTimeScrubbed(double newTimeSec)
@@ -778,7 +817,9 @@ namespace WinMusicXmlPlayer
                     Style = menuStyle
                 };
                 MenuRecentFiles.Items.Add(emptyItem);
-                return;
+
+                if (string.IsNullOrWhiteSpace(ThemeManager.LastOpenedScorePath))
+                    return;
             }
 
             for (int i = 0; i < recents.Count; i++)
@@ -811,6 +852,7 @@ namespace WinMusicXmlPlayer
             var clearItem = new MenuItem
             {
                 Header = "清除最近開啟紀錄",
+                ToolTip = "清除最近開啟紀錄，並停止下次啟動自動載入",
                 Style = menuStyle
             };
             clearItem.Click += (_, _) =>
@@ -818,7 +860,7 @@ namespace WinMusicXmlPlayer
                 CloseOtherTopMenus(null);
                 ThemeManager.ClearRecentFiles();
                 RefreshRecentFilesMenu();
-                ShowToast("已清除最近開啟紀錄");
+                ShowToast("已清除最近開啟紀錄（含自動載入）");
             };
             MenuRecentFiles.Items.Add(clearItem);
         }
@@ -1219,6 +1261,11 @@ namespace WinMusicXmlPlayer
 
         private void BtnPlayPause_Click(object sender, RoutedEventArgs e)
         {
+            TogglePlayPause();
+        }
+
+        private void TogglePlayPause()
+        {
             if (_currentScore == null)
             {
                 PromptAndLoadMusicXml(autoPlay: true);
@@ -1303,6 +1350,9 @@ namespace WinMusicXmlPlayer
 
             _audioEngine.MasterVolume = snapped;
             TxtMasterVolume.Text = $"{(int)Math.Round(snapped * 100)}%";
+
+            if (snapped > 0.001)
+                ThemeManager.SetMasterVolume(snapped);
 
             if (snapped > 0.001)
             {

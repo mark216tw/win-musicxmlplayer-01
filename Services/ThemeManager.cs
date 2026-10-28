@@ -45,17 +45,19 @@ namespace WinMusicXmlPlayer.Services
         public int SelectedPresetIndex { get; set; } = 0;
         public string LastOpenedDirectory { get; set; } = string.Empty;
         public string LastSoundFontDirectory { get; set; } = string.Empty;
+        public string LastOpenedScorePath { get; set; } = string.Empty;
         public string GeneralSoundFontPath { get; set; } = string.Empty;
         public string PianoSoundFontPath { get; set; } = string.Empty;
-        public int ReverbAmount { get; set; } = 40;
+        public int ReverbAmount { get; set; } = 30;
         public int ChorusAmount { get; set; } = 15;
+        public double MasterVolume { get; set; } = 1.0;
         public List<string> RecentFiles { get; set; } = new();
         public int LastViewMode { get; set; } = 0;
         public double LastVisibleWindowSeconds { get; set; } = 19.53;
         public int VisualSyncOffsetMs { get; set; } = 0;
-        public int HumanizeAmount { get; set; } = 0;
-        public int VelocityCurve { get; set; } = 1;
-        public int DynamicRangePercent { get; set; } = 100;
+        public int HumanizeAmount { get; set; } = 30;
+        public int VelocityCurve { get; set; } = 0;
+        public int DynamicRangePercent { get; set; } = 70;
         public bool AutoPianoPedal { get; set; } = true;
         public bool AutoVibrato { get; set; } = true;
         public bool InstrumentSpatialProfile { get; set; } = true;
@@ -83,17 +85,19 @@ namespace WinMusicXmlPlayer.Services
         private static int _selectedPresetIndex = 0;
         private static string _lastOpenedDirectory = string.Empty;
         private static string _lastSoundFontDirectory = string.Empty;
+        private static string _lastOpenedScorePath = string.Empty;
         private static string _generalSoundFontPath = string.Empty;
         private static string _pianoSoundFontPath = string.Empty;
-        private static int _reverbAmount = 40;
+        private static int _reverbAmount = 30;
         private static int _chorusAmount = 15;
+        private static double _masterVolume = 1.0;
         private static readonly List<string> _recentFiles = new();
         private static int _lastViewMode = 0;
         private static double _lastVisibleWindowSeconds = 19.53;
         private static int _visualSyncOffsetMs = 0;
-        private static int _humanizeAmount = 0;
-        private static int _velocityCurve = 1;
-        private static int _dynamicRangePercent = 100;
+        private static int _humanizeAmount = 30;
+        private static int _velocityCurve = 0;
+        private static int _dynamicRangePercent = 70;
         private static bool _autoPianoPedal = true;
         private static bool _autoVibrato = true;
         private static bool _instrumentSpatialProfile = true;
@@ -108,10 +112,12 @@ namespace WinMusicXmlPlayer.Services
         public static int SelectedPresetIndex => _selectedPresetIndex;
         public static string LastOpenedDirectory => _lastOpenedDirectory;
         public static string LastSoundFontDirectory => _lastSoundFontDirectory;
+        public static string LastOpenedScorePath => _lastOpenedScorePath;
         public static string GeneralSoundFontPath => _generalSoundFontPath;
         public static string PianoSoundFontPath => _pianoSoundFontPath;
         public static int ReverbAmount => _reverbAmount;
         public static int ChorusAmount => _chorusAmount;
+        public static double MasterVolume => _masterVolume;
         public static IReadOnlyList<string> RecentFiles => _recentFiles;
         public static int LastViewMode => _lastViewMode;
         public static double LastVisibleWindowSeconds => _lastVisibleWindowSeconds;
@@ -257,6 +263,14 @@ namespace WinMusicXmlPlayer.Services
             _preferencesDirty = true;
         }
 
+        public static void SetMasterVolume(double value)
+        {
+            double snapped = Math.Round(Math.Clamp(value, 0.0, 2.0) * 20.0) / 20.0;
+            if (Math.Abs(_masterVolume - snapped) < 0.0001) return;
+            _masterVolume = snapped;
+            _preferencesDirty = true;
+        }
+
         public static void SetVisualSyncOffsetMs(int offsetMs)
         {
             int clamped = Math.Clamp(offsetMs, -200, 200);
@@ -324,6 +338,27 @@ namespace WinMusicXmlPlayer.Services
             };
         }
 
+        public static void SetLastOpenedScorePath(string? filePath)
+        {
+            if (string.IsNullOrWhiteSpace(filePath)) return;
+
+            string fullPath;
+            try
+            {
+                fullPath = Path.GetFullPath(filePath);
+            }
+            catch
+            {
+                return;
+            }
+
+            if (string.Equals(_lastOpenedScorePath, fullPath, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            _lastOpenedScorePath = fullPath;
+            SavePreferences();
+        }
+
         public static void AddRecentFile(string filePath)
         {
             if (string.IsNullOrWhiteSpace(filePath)) return;
@@ -340,6 +375,7 @@ namespace WinMusicXmlPlayer.Services
         public static void ClearRecentFiles()
         {
             _recentFiles.Clear();
+            _lastOpenedScorePath = string.Empty;
             SavePreferences();
         }
 
@@ -811,6 +847,10 @@ namespace WinMusicXmlPlayer.Services
                     {
                         _lastSoundFontDirectory = data.LastSoundFontDirectory;
                     }
+                    if (!string.IsNullOrWhiteSpace(data.LastOpenedScorePath))
+                    {
+                        _lastOpenedScorePath = data.LastOpenedScorePath;
+                    }
                     if (!string.IsNullOrWhiteSpace(data.GeneralSoundFontPath) && File.Exists(data.GeneralSoundFontPath))
                     {
                         _generalSoundFontPath = data.GeneralSoundFontPath;
@@ -826,6 +866,10 @@ namespace WinMusicXmlPlayer.Services
                     if (data.ChorusAmount is >= 0 and <= 100)
                     {
                         _chorusAmount = data.ChorusAmount;
+                    }
+                    if (double.IsFinite(data.MasterVolume) && data.MasterVolume >= 0.05)
+                    {
+                        _masterVolume = Math.Clamp(Math.Round(data.MasterVolume * 20.0) / 20.0, 0.05, 2.0);
                     }
                     if (data.RecentFiles != null)
                     {
@@ -874,10 +918,12 @@ namespace WinMusicXmlPlayer.Services
                 SelectedPresetIndex = _selectedPresetIndex,
                 LastOpenedDirectory = _lastOpenedDirectory,
                 LastSoundFontDirectory = _lastSoundFontDirectory,
+                LastOpenedScorePath = _lastOpenedScorePath,
                 GeneralSoundFontPath = _generalSoundFontPath,
                 PianoSoundFontPath = _pianoSoundFontPath,
                 ReverbAmount = _reverbAmount,
                 ChorusAmount = _chorusAmount,
+                MasterVolume = _masterVolume,
                 RecentFiles = new List<string>(_recentFiles),
                 LastViewMode = _lastViewMode,
                 LastVisibleWindowSeconds = _lastVisibleWindowSeconds,

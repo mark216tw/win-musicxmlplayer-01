@@ -9,9 +9,9 @@ namespace WinMusicXmlPlayer.Models
 
     public sealed class PerformanceOptions
     {
-        public int HumanizeAmount { get; set; } = 0;
-        public VelocityCurveMode VelocityCurve { get; set; } = VelocityCurveMode.Linear;
-        public int DynamicRangePercent { get; set; } = 100;
+        public int HumanizeAmount { get; set; } = 30;
+        public VelocityCurveMode VelocityCurve { get; set; } = VelocityCurveMode.Soft;
+        public int DynamicRangePercent { get; set; } = 70;
         public bool AutoPianoPedal { get; set; } = true;
         public bool AutoVibrato { get; set; } = true;
         public bool InstrumentSpatialProfile { get; set; } = true;

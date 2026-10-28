@@ -48,7 +48,7 @@ namespace WinMusicXmlPlayer.Services
         private bool _isPlaying;
         private double _currentTimeSec;
         private double _playbackSpeed = 1.0;
-        private double _masterVolume = 1.25;
+        private double _masterVolume = 1.0;
 
         // A-B 區間循環狀態
         private double? _loopStartSec;
@@ -71,7 +71,7 @@ namespace WinMusicXmlPlayer.Services
 
         public bool UseInstrumentSpatialProfile { get; set; } = true;
 
-        private int _reverbAmount = 40;
+        private int _reverbAmount = 30;
         private int _chorusAmount = 15;
 
         // ===== 影音同步時鐘 (A/V Sync Clock) =====

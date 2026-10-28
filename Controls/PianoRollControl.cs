@@ -24,7 +24,11 @@ namespace WinMusicXmlPlayer.Controls
         private double _visibleWindowSeconds = 19.53;
 
         // 滑鼠左右拖拉調整時間狀態
+        private const double ClickDragThresholdPx = 4.0;
         private bool _isDraggingTime;
+        private bool _leftPressPendingClick;
+        private bool _clickTogglesPlayPause;
+        private bool _suppressClickToggle;
         private Point _dragStartPoint;
         private double _dragStartTimeSec;
         private bool _dragFromTopRuler;
@@ -161,7 +165,7 @@ namespace WinMusicXmlPlayer.Controls
             _cachedTextAccentColor = accent;
 
             _cachedHintFt = new FormattedText(
-                "⇄ 左鍵拖曳調時間 · 右鍵設 A-B 循環 · 滾輪縮放視野 · 點擊下方琴鍵試聽",
+                "⏯ 音符區單擊播放/暫停 · ⇄ 左鍵拖曳調時間 · 右鍵設 A-B 循環 · 滾輪縮放 · 點擊琴鍵試聽",
                 CultureInfo.InvariantCulture,
                 FlowDirection.LeftToRight,
                 UiTypeface,
@@ -295,6 +299,7 @@ namespace WinMusicXmlPlayer.Controls
         public event Action<double>? TimeScrubbed;
         public event Action? ScrubStarted;
         public event Action? ScrubEnded;
+        public event Action? PlayPauseToggleRequested;
         public event Action<double>? LoopPointRightClicked;
         public event Action<double>? VisibleWindowChanged;
 
@@ -389,18 +394,15 @@ namespace WinMusicXmlPlayer.Controls
             base.OnMouseLeftButtonDown(e);
             if (_score == null) return;
 
-            _isDraggingTime = true;
+            _leftPressPendingClick = true;
+            _isDraggingTime = false;
             _dragStartPoint = e.GetPosition(this);
             _dragStartTimeSec = _currentTimeSec;
             _dragFromTopRuler = _dragStartPoint.Y <= 30.0 && _viewMode == PianoRollViewMode.HorizontalTimeline;
+            _clickTogglesPlayPause = IsInToggleArea(_dragStartPoint);
+            _suppressClickToggle = e.ClickCount > 1;
 
             CaptureMouse();
-            ScrubStarted?.Invoke();
-
-            if (_dragFromTopRuler)
-            {
-                UpdateScrubFromMouse(_dragStartPoint);
-            }
             InvalidateVisual();
         }
 
@@ -421,6 +423,31 @@ namespace WinMusicXmlPlayer.Controls
             if (_score == null) return;
 
             Point pt = e.GetPosition(this);
+            if (_leftPressPendingClick)
+            {
+                if (e.LeftButton != MouseButtonState.Pressed)
+                {
+                    _leftPressPendingClick = false;
+                    _clickTogglesPlayPause = false;
+                    _suppressClickToggle = false;
+                    return;
+                }
+
+                double dx = pt.X - _dragStartPoint.X;
+                double dy = pt.Y - _dragStartPoint.Y;
+                if (Math.Max(Math.Abs(dx), Math.Abs(dy)) >= ClickDragThresholdPx)
+                {
+                    _leftPressPendingClick = false;
+                    _clickTogglesPlayPause = false;
+                    _suppressClickToggle = false;
+                    _isDraggingTime = true;
+                    _dragStartTimeSec = _currentTimeSec;
+                    ScrubStarted?.Invoke();
+                    UpdateScrubFromMouse(pt);
+                }
+                return;
+            }
+
             if (_isDraggingTime)
             {
                 UpdateScrubFromMouse(pt);
@@ -443,6 +470,16 @@ namespace WinMusicXmlPlayer.Controls
                 _hoveredNote = null;
                 InvalidateVisual();
             }
+        }
+
+        private bool IsInToggleArea(Point pt)
+        {
+            if (_viewMode == PianoRollViewMode.VerticalFalling)
+                return true;
+
+            const double rulerH = 30.0;
+            const double pitchBarW = 44.0;
+            return pt.X >= pitchBarW && pt.Y > rulerH;
         }
 
         private double ResolveTimeAtPoint(Point pt)
@@ -566,6 +603,23 @@ namespace WinMusicXmlPlayer.Controls
         protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e)
         {
             base.OnMouseLeftButtonUp(e);
+            if (_leftPressPendingClick)
+            {
+                bool shouldToggle = _clickTogglesPlayPause && !_suppressClickToggle;
+                _leftPressPendingClick = false;
+                _clickTogglesPlayPause = false;
+                _suppressClickToggle = false;
+
+                if (IsMouseCaptured)
+                    ReleaseMouseCapture();
+
+                if (shouldToggle)
+                    PlayPauseToggleRequested?.Invoke();
+
+                InvalidateVisual();
+                return;
+            }
+
             if (_isDraggingTime)
             {
                 _isDraggingTime = false;
@@ -573,6 +627,23 @@ namespace WinMusicXmlPlayer.Controls
                 ScrubEnded?.Invoke();
                 InvalidateVisual();
             }
+        }
+
+        protected override void OnLostMouseCapture(MouseEventArgs e)
+        {
+            base.OnLostMouseCapture(e);
+
+            _leftPressPendingClick = false;
+            _clickTogglesPlayPause = false;
+            _suppressClickToggle = false;
+
+            if (_isDraggingTime)
+            {
+                _isDraggingTime = false;
+                ScrubEnded?.Invoke();
+            }
+
+            InvalidateVisual();
         }
 
         protected override void OnMouseWheel(MouseWheelEventArgs e)

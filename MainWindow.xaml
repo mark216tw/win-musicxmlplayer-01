@@ -614,7 +614,8 @@
 
                 <!-- 上方：鋼琴卷軸介面 (支援滑鼠左滑/右滑調整播放時間) -->
                 <Grid Grid.Row="0">
-                    <controls:PianoRollControl x:Name="PianoRoll"/>
+                    <controls:PianoRollControl x:Name="PianoRoll"
+                                          ToolTip="音符區單擊播放/暫停；左右拖曳調整時間"/>
 
                     <!-- 右下角卷軸視野縮放快捷鈕 -->
                     <Border HorizontalAlignment="Right"
@@ -870,17 +871,17 @@
                                 Width="72"
                                 Minimum="0.0"
                                 Maximum="2.0"
-                                Value="1.25"
+                                Value="1.0"
                                 TickFrequency="0.05"
                                 IsSnapToTickEnabled="True"
                                 SmallChange="0.05"
                                 LargeChange="0.05"
                                 ValueChanged="SliderMasterVolume_ValueChanged"
                                 MouseDoubleClick="SliderMasterVolume_MouseDoubleClick"
-                                ToolTip="以 5% 為單位調整（雙擊恢復 100%）"
+                                ToolTip="以 5% 為單位調整（雙擊恢復 100%，會記住上次音量）"
                                 VerticalAlignment="Center"/>
                         <TextBlock x:Name="TxtMasterVolume"
-                                   Text="125%"
+                                   Text="100%"
                                    Width="36"
                                    Foreground="{DynamicResource TextPrimaryBrush}"
                                    FontSize="12"

@@ -47,12 +47,28 @@ namespace WinMusicXmlPlayer
             }
         }
 
-        private string GetInitialSf2Directory()
+        private static string GetBuiltInSf2Directory()
         {
             string localSfDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Assets", "SoundFonts");
             if (Directory.Exists(localSfDir))
                 return localSfDir;
             return AppDomain.CurrentDomain.BaseDirectory;
+        }
+
+        private string GetInitialSf2Directory()
+        {
+            string lastDirectory = ThemeManager.LastSoundFontDirectory;
+            if (!string.IsNullOrWhiteSpace(lastDirectory) && Directory.Exists(lastDirectory))
+                return lastDirectory;
+
+            return GetBuiltInSf2Directory();
+        }
+
+        private static void RememberSelectedSoundFontDirectory(string selectedFile)
+        {
+            string? directory = Path.GetDirectoryName(selectedFile);
+            if (!string.IsNullOrWhiteSpace(directory))
+                ThemeManager.SetLastSoundFontDirectory(directory);
         }
 
         private async void BtnSelectPianoSf_Click(object sender, RoutedEventArgs e)
@@ -67,6 +83,7 @@ namespace WinMusicXmlPlayer
             if (dlg.ShowDialog(this) == true)
             {
                 string selectedFile = dlg.FileName;
+                RememberSelectedSoundFontDirectory(selectedFile);
                 TxtActionFeedback.Text = $"⏳ 正在背景載入鋼琴音源：{Path.GetFileName(selectedFile)}...";
                 var btn = sender as UIElement;
                 if (btn != null) btn.IsEnabled = false;
@@ -115,6 +132,7 @@ namespace WinMusicXmlPlayer
             if (dlg.ShowDialog(this) == true)
             {
                 string selectedFile = dlg.FileName;
+                RememberSelectedSoundFontDirectory(selectedFile);
                 TxtActionFeedback.Text = $"⏳ 正在背景載入通用音源：{Path.GetFileName(selectedFile)}...";
                 var btn = sender as UIElement;
                 if (btn != null) btn.IsEnabled = false;
@@ -166,7 +184,7 @@ namespace WinMusicXmlPlayer
         {
             try
             {
-                string folder = GetInitialSf2Directory();
+                string folder = GetBuiltInSf2Directory();
                 Directory.CreateDirectory(folder);
                 Process.Start(new ProcessStartInfo
                 {

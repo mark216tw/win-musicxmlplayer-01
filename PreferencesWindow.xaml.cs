@@ -88,6 +88,20 @@ namespace WinMusicXmlPlayer
                 UpdateDisplayModeButtonsVisual(ThemeManager.DisplayMode);
                 UpdateWindowStyleButtonsVisual(ThemeManager.WindowStyle);
                 SliderHue.Value = ThemeManager.CurrentHue;
+                SliderReverb.Value = ThemeManager.ReverbAmount;
+                SliderChorus.Value = ThemeManager.ChorusAmount;
+                TxtReverbValue.Text = $"{ThemeManager.ReverbAmount}%";
+                TxtChorusValue.Text = $"{ThemeManager.ChorusAmount}%";
+                SliderVisualSyncOffset.Value = ThemeManager.VisualSyncOffsetMs;
+                TxtVisualSyncOffsetValue.Text = FormatSyncOffset(ThemeManager.VisualSyncOffsetMs);
+                SliderHumanize.Value = ThemeManager.HumanizeAmount;
+                TxtHumanizeValue.Text = $"{ThemeManager.HumanizeAmount}%";
+                SliderDynamicRange.Value = ThemeManager.DynamicRangePercent;
+                TxtDynamicRangeValue.Text = $"{ThemeManager.DynamicRangePercent}%";
+                ComboVelocityCurve.SelectedIndex = ThemeManager.VelocityCurve;
+                ChkAutoPianoPedal.IsChecked = ThemeManager.AutoPianoPedal;
+                ChkAutoVibrato.IsChecked = ThemeManager.AutoVibrato;
+                ChkInstrumentSpatial.IsChecked = ThemeManager.InstrumentSpatialProfile;
                 UpdateColorVisualIndicators();
             }
             finally
@@ -239,6 +253,93 @@ namespace WinMusicXmlPlayer
             {
                 ThemeManager.SetLanguage(lang);
             }
+        }
+
+        private void SliderReverb_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (_isSyncingUi || !IsLoaded) return;
+
+            int value = (int)Math.Round(e.NewValue);
+            TxtReverbValue.Text = $"{value}%";
+            ThemeManager.SetReverbAmount(value);
+        }
+
+        private void SliderChorus_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (_isSyncingUi || !IsLoaded) return;
+
+            int value = (int)Math.Round(e.NewValue);
+            TxtChorusValue.Text = $"{value}%";
+            ThemeManager.SetChorusAmount(value);
+        }
+
+        private void SliderVisualSyncOffset_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (_isSyncingUi || !IsLoaded) return;
+
+            int value = (int)Math.Round(e.NewValue);
+            TxtVisualSyncOffsetValue.Text = FormatSyncOffset(value);
+            ThemeManager.SetVisualSyncOffsetMs(value);
+        }
+
+        private void BtnResetSyncOffset_Click(object sender, RoutedEventArgs e)
+        {
+            SliderVisualSyncOffset.Value = 0;
+            TxtVisualSyncOffsetValue.Text = FormatSyncOffset(0);
+            ThemeManager.SetVisualSyncOffsetMs(0);
+        }
+
+        private static string FormatSyncOffset(int ms)
+        {
+            return ms > 0 ? $"+{ms} ms" : $"{ms} ms";
+        }
+
+        private void SliderHumanize_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (_isSyncingUi || !IsLoaded) return;
+            int value = (int)Math.Round(e.NewValue);
+            TxtHumanizeValue.Text = $"{value}%";
+            ThemeManager.SetHumanizeAmount(value);
+        }
+
+        private void BtnResetHumanize_Click(object sender, RoutedEventArgs e)
+        {
+            SliderHumanize.Value = 30;
+            TxtHumanizeValue.Text = "30%";
+            ThemeManager.SetHumanizeAmount(30);
+        }
+
+        private void SliderDynamicRange_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (_isSyncingUi || !IsLoaded) return;
+            int value = (int)Math.Round(e.NewValue);
+            TxtDynamicRangeValue.Text = $"{value}%";
+            ThemeManager.SetDynamicRangePercent(value);
+        }
+
+        private void ComboVelocityCurve_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_isSyncingUi || !IsLoaded) return;
+            if (ComboVelocityCurve.SelectedIndex >= 0)
+                ThemeManager.SetVelocityCurve(ComboVelocityCurve.SelectedIndex);
+        }
+
+        private void ChkAutoPianoPedal_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_isSyncingUi || !IsLoaded) return;
+            ThemeManager.SetAutoPianoPedal(ChkAutoPianoPedal.IsChecked == true);
+        }
+
+        private void ChkAutoVibrato_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_isSyncingUi || !IsLoaded) return;
+            ThemeManager.SetAutoVibrato(ChkAutoVibrato.IsChecked == true);
+        }
+
+        private void ChkInstrumentSpatial_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_isSyncingUi || !IsLoaded) return;
+            ThemeManager.SetInstrumentSpatialProfile(ChkInstrumentSpatial.IsChecked == true);
         }
 
         private void BtnClose_Click(object sender, RoutedEventArgs e)

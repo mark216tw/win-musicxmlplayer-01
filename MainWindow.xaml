@@ -393,6 +393,7 @@
                                                 <RowDefinition Height="Auto"/>
                                                 <RowDefinition Height="Auto"/>
                                                 <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="Auto"/>
                                             </Grid.RowDefinitions>
 
                                             <!-- 第一列：聲部色塊、名稱與靜音/獨奏按鈕 -->
@@ -433,30 +434,74 @@
                                                 </StackPanel>
                                             </Grid>
 
-                                            <!-- 第二列：樂器音色切換選單 -->
+                                            <!-- 第二列：GM 樂器音色切換選單 -->
                                             <Grid Grid.Row="1" Margin="0,7,0,0">
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="Auto"/>
                                                     <ColumnDefinition Width="*"/>
                                                 </Grid.ColumnDefinitions>
                                                 <TextBlock Grid.Column="0"
-                                                           Text="音色："
+                                                           Text="GM 音色："
                                                            Foreground="{DynamicResource TextSecondaryBrush}"
                                                            FontSize="12"
                                                            VerticalAlignment="Center"
                                                            Margin="0,0,6,0"/>
                                                 <ComboBox Grid.Column="1"
-                                                          ItemsSource="{Binding DataContext.GmInstrumentList, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                          ItemsSource="{Binding InstrumentOptions}"
+                                                          DisplayMemberPath="DisplayText"
                                                           SelectedValuePath="Program"
                                                           SelectedValue="{Binding GmProgram, Mode=TwoWay}"
                                                           SelectionChanged="TrackInstrument_SelectionChanged"
                                                           Height="26"
                                                           FontSize="12"
-                                                          VerticalContentAlignment="Center"/>
+                                                          VerticalContentAlignment="Center"
+                                                          ToolTip="此聲部的 GM 音色清單會依目前實際使用的音源（獨立鋼琴或通用音源）顯示 Preset 名稱；灰色項目表示該音源未提供，播放時會自動使用替代音色。">
+                                                    <ComboBox.ItemContainerStyle>
+                                                        <Style TargetType="ComboBoxItem">
+                                                            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsAvailable}" Value="False">
+                                                                    <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </ComboBox.ItemContainerStyle>
+                                                </ComboBox>
                                             </Grid>
 
-                                            <!-- 第三列：聲部獨立音量滑桿與卷軸顯示開關 -->
-                                            <Grid Grid.Row="2" Margin="0,7,0,0">
+                                            <!-- 第三列：目前實際使用的音源 -->
+                                            <Grid Grid.Row="2" Margin="0,3,0,0">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0"
+                                                           Text="音源："
+                                                           Foreground="{DynamicResource TextSecondaryBrush}"
+                                                           FontSize="11.5"
+                                                           VerticalAlignment="Center"
+                                                           Margin="0,0,6,0"/>
+                                                <TextBlock Grid.Column="1"
+                                                           Text="{Binding SoundFontRouteText}"
+                                                           FontSize="11"
+                                                           TextTrimming="CharacterEllipsis"
+                                                           ToolTip="{Binding SoundFontRouteText}"
+                                                           VerticalAlignment="Center">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding UsesDedicatedPianoSynth}" Value="True">
+                                                                    <Setter Property="Foreground" Value="{DynamicResource AccentBlueBrush}"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                            </Grid>
+
+                                            <!-- 第四列：聲部獨立音量滑桿與卷軸顯示開關 -->
+                                            <Grid Grid.Row="3" Margin="0,7,0,0">
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="Auto"/>
                                                     <ColumnDefinition Width="*"/>
@@ -503,8 +548,8 @@
                                                           Cursor="Hand"/>
                                             </Grid>
 
-                                            <!-- 第四列：即時發聲強度動態條與音符數 -->
-                                            <Grid Grid.Row="3" Margin="0,6,0,0">
+                                            <!-- 第五列：即時發聲強度動態條與音符數 -->
+                                            <Grid Grid.Row="4" Margin="0,6,0,0">
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="*"/>
                                                     <ColumnDefinition Width="Auto"/>

@@ -7,6 +7,7 @@ using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
 using Microsoft.Win32;
+using WinMusicXmlPlayer.Models;
 
 namespace WinMusicXmlPlayer.Services
 {
@@ -43,11 +44,21 @@ namespace WinMusicXmlPlayer.Services
         public double ThemeHue { get; set; } = 199.0;
         public int SelectedPresetIndex { get; set; } = 0;
         public string LastOpenedDirectory { get; set; } = string.Empty;
+        public string LastSoundFontDirectory { get; set; } = string.Empty;
         public string GeneralSoundFontPath { get; set; } = string.Empty;
         public string PianoSoundFontPath { get; set; } = string.Empty;
+        public int ReverbAmount { get; set; } = 40;
+        public int ChorusAmount { get; set; } = 15;
         public List<string> RecentFiles { get; set; } = new();
         public int LastViewMode { get; set; } = 0;
         public double LastVisibleWindowSeconds { get; set; } = 19.53;
+        public int VisualSyncOffsetMs { get; set; } = 0;
+        public int HumanizeAmount { get; set; } = 0;
+        public int VelocityCurve { get; set; } = 1;
+        public int DynamicRangePercent { get; set; } = 100;
+        public bool AutoPianoPedal { get; set; } = true;
+        public bool AutoVibrato { get; set; } = true;
+        public bool InstrumentSpatialProfile { get; set; } = true;
     }
 
     public static class ThemeManager
@@ -71,11 +82,21 @@ namespace WinMusicXmlPlayer.Services
         private static double _currentHue = 199.0;
         private static int _selectedPresetIndex = 0;
         private static string _lastOpenedDirectory = string.Empty;
+        private static string _lastSoundFontDirectory = string.Empty;
         private static string _generalSoundFontPath = string.Empty;
         private static string _pianoSoundFontPath = string.Empty;
+        private static int _reverbAmount = 40;
+        private static int _chorusAmount = 15;
         private static readonly List<string> _recentFiles = new();
         private static int _lastViewMode = 0;
         private static double _lastVisibleWindowSeconds = 19.53;
+        private static int _visualSyncOffsetMs = 0;
+        private static int _humanizeAmount = 0;
+        private static int _velocityCurve = 1;
+        private static int _dynamicRangePercent = 100;
+        private static bool _autoPianoPedal = true;
+        private static bool _autoVibrato = true;
+        private static bool _instrumentSpatialProfile = true;
         private static Color _currentAccentColor = ColorFromHue(199.0);
         private static bool _isDarkEffective = true;
         private static bool _systemHooked;
@@ -86,11 +107,21 @@ namespace WinMusicXmlPlayer.Services
         public static double CurrentHue => _currentHue;
         public static int SelectedPresetIndex => _selectedPresetIndex;
         public static string LastOpenedDirectory => _lastOpenedDirectory;
+        public static string LastSoundFontDirectory => _lastSoundFontDirectory;
         public static string GeneralSoundFontPath => _generalSoundFontPath;
         public static string PianoSoundFontPath => _pianoSoundFontPath;
+        public static int ReverbAmount => _reverbAmount;
+        public static int ChorusAmount => _chorusAmount;
         public static IReadOnlyList<string> RecentFiles => _recentFiles;
         public static int LastViewMode => _lastViewMode;
         public static double LastVisibleWindowSeconds => _lastVisibleWindowSeconds;
+        public static int VisualSyncOffsetMs => _visualSyncOffsetMs;
+        public static int HumanizeAmount => _humanizeAmount;
+        public static int VelocityCurve => _velocityCurve;
+        public static int DynamicRangePercent => _dynamicRangePercent;
+        public static bool AutoPianoPedal => _autoPianoPedal;
+        public static bool AutoVibrato => _autoVibrato;
+        public static bool InstrumentSpatialProfile => _instrumentSpatialProfile;
         public static Color CurrentAccentColor => _currentAccentColor;
         public static bool IsDarkMode => _isDarkEffective;
 
@@ -99,6 +130,7 @@ namespace WinMusicXmlPlayer.Services
         public static Color CurrentRollRulerColor { get; private set; } = Color.FromRgb(22, 32, 52);
 
         public static event Action? ThemeChanged;
+        public static event Action<int>? VisualSyncOffsetChanged;
 
         [DllImport("dwmapi.dll", PreserveSig = true)]
         private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
@@ -185,6 +217,18 @@ namespace WinMusicXmlPlayer.Services
             SavePreferences();
         }
 
+        public static void SetLastSoundFontDirectory(string? directoryPath)
+        {
+            if (string.IsNullOrWhiteSpace(directoryPath) || !Directory.Exists(directoryPath))
+                return;
+
+            if (string.Equals(_lastSoundFontDirectory, directoryPath, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            _lastSoundFontDirectory = directoryPath;
+            SavePreferences();
+        }
+
         public static void SetGeneralSoundFontPath(string? sf2Path)
         {
             _generalSoundFontPath = sf2Path ?? string.Empty;
@@ -195,6 +239,89 @@ namespace WinMusicXmlPlayer.Services
         {
             _pianoSoundFontPath = sf2Path ?? string.Empty;
             SavePreferences();
+        }
+
+        public static void SetReverbAmount(int value)
+        {
+            int clamped = Math.Clamp(value, 0, 100);
+            if (_reverbAmount == clamped) return;
+            _reverbAmount = clamped;
+            _preferencesDirty = true;
+        }
+
+        public static void SetChorusAmount(int value)
+        {
+            int clamped = Math.Clamp(value, 0, 100);
+            if (_chorusAmount == clamped) return;
+            _chorusAmount = clamped;
+            _preferencesDirty = true;
+        }
+
+        public static void SetVisualSyncOffsetMs(int offsetMs)
+        {
+            int clamped = Math.Clamp(offsetMs, -200, 200);
+            if (_visualSyncOffsetMs == clamped) return;
+            _visualSyncOffsetMs = clamped;
+            _preferencesDirty = true;
+            VisualSyncOffsetChanged?.Invoke(_visualSyncOffsetMs);
+        }
+
+        public static void SetHumanizeAmount(int value)
+        {
+            int clamped = Math.Clamp(value, 0, 100);
+            if (_humanizeAmount == clamped) return;
+            _humanizeAmount = clamped;
+            _preferencesDirty = true;
+        }
+
+        public static void SetVelocityCurve(int value)
+        {
+            int clamped = Math.Clamp(value, 0, 2);
+            if (_velocityCurve == clamped) return;
+            _velocityCurve = clamped;
+            _preferencesDirty = true;
+        }
+
+        public static void SetDynamicRangePercent(int value)
+        {
+            int clamped = Math.Clamp(value, 50, 150);
+            if (_dynamicRangePercent == clamped) return;
+            _dynamicRangePercent = clamped;
+            _preferencesDirty = true;
+        }
+
+        public static void SetAutoPianoPedal(bool value)
+        {
+            if (_autoPianoPedal == value) return;
+            _autoPianoPedal = value;
+            _preferencesDirty = true;
+        }
+
+        public static void SetAutoVibrato(bool value)
+        {
+            if (_autoVibrato == value) return;
+            _autoVibrato = value;
+            _preferencesDirty = true;
+        }
+
+        public static void SetInstrumentSpatialProfile(bool value)
+        {
+            if (_instrumentSpatialProfile == value) return;
+            _instrumentSpatialProfile = value;
+            _preferencesDirty = true;
+        }
+
+        public static PerformanceOptions CreatePerformanceOptions()
+        {
+            return new PerformanceOptions
+            {
+                HumanizeAmount = _humanizeAmount,
+                VelocityCurve = (VelocityCurveMode)_velocityCurve,
+                DynamicRangePercent = _dynamicRangePercent,
+                AutoPianoPedal = _autoPianoPedal,
+                AutoVibrato = _autoVibrato,
+                InstrumentSpatialProfile = _instrumentSpatialProfile
+            };
         }
 
         public static void AddRecentFile(string filePath)
@@ -680,6 +807,10 @@ namespace WinMusicXmlPlayer.Services
                     {
                         _lastOpenedDirectory = data.LastOpenedDirectory;
                     }
+                    if (!string.IsNullOrWhiteSpace(data.LastSoundFontDirectory) && Directory.Exists(data.LastSoundFontDirectory))
+                    {
+                        _lastSoundFontDirectory = data.LastSoundFontDirectory;
+                    }
                     if (!string.IsNullOrWhiteSpace(data.GeneralSoundFontPath) && File.Exists(data.GeneralSoundFontPath))
                     {
                         _generalSoundFontPath = data.GeneralSoundFontPath;
@@ -687,6 +818,14 @@ namespace WinMusicXmlPlayer.Services
                     if (!string.IsNullOrWhiteSpace(data.PianoSoundFontPath) && File.Exists(data.PianoSoundFontPath))
                     {
                         _pianoSoundFontPath = data.PianoSoundFontPath;
+                    }
+                    if (data.ReverbAmount is >= 0 and <= 100)
+                    {
+                        _reverbAmount = data.ReverbAmount;
+                    }
+                    if (data.ChorusAmount is >= 0 and <= 100)
+                    {
+                        _chorusAmount = data.ChorusAmount;
                     }
                     if (data.RecentFiles != null)
                     {
@@ -704,6 +843,16 @@ namespace WinMusicXmlPlayer.Services
                     {
                         _lastVisibleWindowSeconds = data.LastVisibleWindowSeconds;
                     }
+                    if (data.VisualSyncOffsetMs is >= -200 and <= 200)
+                    {
+                        _visualSyncOffsetMs = data.VisualSyncOffsetMs;
+                    }
+                    _humanizeAmount = Math.Clamp(data.HumanizeAmount, 0, 100);
+                    _velocityCurve = Math.Clamp(data.VelocityCurve, 0, 2);
+                    _dynamicRangePercent = Math.Clamp(data.DynamicRangePercent, 50, 150);
+                    _autoPianoPedal = data.AutoPianoPedal;
+                    _autoVibrato = data.AutoVibrato;
+                    _instrumentSpatialProfile = data.InstrumentSpatialProfile;
                 }
             }
             catch
@@ -724,11 +873,21 @@ namespace WinMusicXmlPlayer.Services
                 ThemeHue = _currentHue,
                 SelectedPresetIndex = _selectedPresetIndex,
                 LastOpenedDirectory = _lastOpenedDirectory,
+                LastSoundFontDirectory = _lastSoundFontDirectory,
                 GeneralSoundFontPath = _generalSoundFontPath,
                 PianoSoundFontPath = _pianoSoundFontPath,
+                ReverbAmount = _reverbAmount,
+                ChorusAmount = _chorusAmount,
                 RecentFiles = new List<string>(_recentFiles),
                 LastViewMode = _lastViewMode,
-                LastVisibleWindowSeconds = _lastVisibleWindowSeconds
+                LastVisibleWindowSeconds = _lastVisibleWindowSeconds,
+                VisualSyncOffsetMs = _visualSyncOffsetMs,
+                HumanizeAmount = _humanizeAmount,
+                VelocityCurve = _velocityCurve,
+                DynamicRangePercent = _dynamicRangePercent,
+                AutoPianoPedal = _autoPianoPedal,
+                AutoVibrato = _autoVibrato,
+                InstrumentSpatialProfile = _instrumentSpatialProfile
             };
             string json = JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
 

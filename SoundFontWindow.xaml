@@ -33,6 +33,11 @@
                            Foreground="{DynamicResource TextSecondaryBrush}"
                            TextWrapping="Wrap"
                            Margin="0,3,0,0"/>
+                <TextBlock Text="註：每個聲部的「GM 音色」會依該聲部實際使用的音源顯示 Preset 名稱；鋼琴聲部若有獨立鋼琴音源，GM 001–006 會顯示該音源的 Preset。"
+                           FontSize="11"
+                           Foreground="{DynamicResource TextMutedBrush}"
+                           TextWrapping="Wrap"
+                           Margin="0,3,0,0"/>
             </StackPanel>
 
             <Button Grid.Column="1"

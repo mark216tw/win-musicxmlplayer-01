@@ -24,6 +24,11 @@ namespace WinMusicXmlPlayer.Models
         public List<MeasureMarker> Measures { get; set; } = new();
 
         /// <summary>
+        /// 各 MIDI Channel 的調變輪（CC1）自動化點，用於弦樂／管樂的延遲顫音。
+        /// </summary>
+        public Dictionary<int, List<ExpressionPoint>> ModulationPointsByChannel { get; set; } = new();
+
+        /// <summary>
         /// 單調遞增的前綴最大結束時間陣列：MaxEndTimePrefix[i] = max(0..i 之 EndTimeSeconds)
         /// 用於 O(log N) 精準定位視窗內第一個尚未結束的音符，避免長音遺漏與硬編碼回推
         /// </summary>
@@ -113,6 +118,8 @@ namespace WinMusicXmlPlayer.Models
         private LinearGradientBrush _blackPressedKeyBrush = CreateFrozenKeyGradient(Color.FromRgb(56, 189, 248), 45);
         private int _noteCount;
         private double _currentActivity;
+        private string _soundFontRouteText = string.Empty;
+        private bool _usesDedicatedPianoSynth;
 
         private static SolidColorBrush CreateFrozenSolidBrush(Color c)
         {
@@ -320,6 +327,42 @@ namespace WinMusicXmlPlayer.Models
             }
         }
 
+        public string SoundFontRouteText
+        {
+            get => _soundFontRouteText;
+            set
+            {
+                if (_soundFontRouteText != value)
+                {
+                    _soundFontRouteText = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        public bool UsesDedicatedPianoSynth
+        {
+            get => _usesDedicatedPianoSynth;
+            set
+            {
+                if (_usesDedicatedPianoSynth != value)
+                {
+                    _usesDedicatedPianoSynth = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        /// <summary>
+        /// 此聲部專屬的 GM 音色選項；會依聲部目前實際使用的音源更新名稱與可用性。
+        /// </summary>
+        public List<GmInstrumentItem> InstrumentOptions { get; } = new();
+
+        /// <summary>
+        /// 此聲部的演奏表情自動化點（CC11），供播放時持續送出。
+        /// </summary>
+        public List<ExpressionPoint> ExpressionPoints { get; } = new();
+
         public event PropertyChangedEventHandler? PropertyChanged;
         protected void OnPropertyChanged([CallerMemberName] string? propName = null)
             => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propName));
@@ -332,6 +375,11 @@ namespace WinMusicXmlPlayer.Models
         public int MidiChannel { get; set; }
         public int MidiPitch { get; set; }
         public int Velocity { get; set; } = 80;
+
+        /// <summary>
+        /// 若此音符需要暫時切換 GM Program（例如小提琴 pizz./tremolo），在此指定。
+        /// </summary>
+        public int? ProgramOverride { get; set; }
 
         /// <summary>
         /// 音符開始時間（秒）
@@ -356,6 +404,7 @@ namespace WinMusicXmlPlayer.Models
         public int Voice { get; set; } = 1;
         public bool IsOrnamentSubNote { get; set; }
         public bool IsSfpDecay { get; set; }
+        public bool IsArpeggiated { get; set; }
         public string ArticulationLabel { get; set; } = string.Empty;
 
         public string PitchName => GetPitchName(MidiPitch);
@@ -384,6 +433,11 @@ namespace WinMusicXmlPlayer.Models
         public double TempoBpm { get; set; } = 120.0;
         public string SectionText { get; set; } = string.Empty;
 
+        /// <summary>
+        /// 各拍點相對小節起點的實際偏移秒數（含延長記號與呼吸停頓），供卷軸精準繪製拍線。
+        /// </summary>
+        public double[] BeatLineTimes { get; set; } = Array.Empty<double>();
+
         public string KeySignatureName => Fifths switch
         {
             -7 => "Cb 大調",
@@ -405,12 +459,54 @@ namespace WinMusicXmlPlayer.Models
         };
     }
 
-    public class GmInstrumentItem
+    public class ExpressionPoint
     {
+        public double TimeSeconds { get; set; }
+        public int Value { get; set; }
+    }
+
+    public class GmInstrumentItem : INotifyPropertyChanged
+    {
+        private string _displayName = string.Empty;
+        private bool _isAvailable = true;
+
         public int Program { get; set; }
         public string Category { get; set; } = string.Empty;
-        public string DisplayName { get; set; } = string.Empty;
 
-        public override string ToString() => $"{Program + 1:000} - {DisplayName}";
+        public string DisplayName
+        {
+            get => _displayName;
+            set
+            {
+                if (_displayName != value)
+                {
+                    _displayName = value;
+                    OnPropertyChanged();
+                    OnPropertyChanged(nameof(DisplayText));
+                }
+            }
+        }
+
+        public bool IsAvailable
+        {
+            get => _isAvailable;
+            set
+            {
+                if (_isAvailable != value)
+                {
+                    _isAvailable = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        public string DisplayText => $"{Program + 1:000} - {DisplayName}";
+
+        public override string ToString() => DisplayText;
+
+        public event PropertyChangedEventHandler? PropertyChanged;
+
+        protected void OnPropertyChanged([CallerMemberName] string? propName = null)
+            => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propName));
     }
 }

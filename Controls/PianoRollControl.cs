@@ -89,6 +89,16 @@ namespace WinMusicXmlPlayer.Controls
         private FormattedText? _cachedEmptyFt;
         private readonly FormattedText?[] _cachedPitchLabels = new FormattedText?[128];
 
+        // 小節標籤與裁剪幾何快取，避免每幀重新配置 FormattedText / RectangleGeometry
+        private FormattedText?[] _cachedHorizontalMeasureLabels = Array.Empty<FormattedText?>();
+        private FormattedText?[] _cachedVerticalMeasureLabels = Array.Empty<FormattedText?>();
+        private RectangleGeometry? _cachedClipGeometry;
+        private double _cachedClipWidth = -1.0;
+        private double _cachedClipHeight = -1.0;
+        private FormattedText? _cachedLoopAFt;
+        private FormattedText? _cachedLoopBFt;
+        private double _cachedLoopLabelDpi = -1.0;
+
         private static SolidColorBrush CreateFrozenBrush(Color c)
         {
             var b = new SolidColorBrush(c);
@@ -169,6 +179,97 @@ namespace WinMusicXmlPlayer.Controls
                 dpi);
 
             Array.Clear(_cachedPitchLabels, 0, _cachedPitchLabels.Length);
+            InvalidateMeasureLabelCache();
+        }
+
+        private void InvalidateMeasureLabelCache()
+        {
+            _cachedHorizontalMeasureLabels = Array.Empty<FormattedText?>();
+            _cachedVerticalMeasureLabels = Array.Empty<FormattedText?>();
+            _cachedClipGeometry = null;
+            _cachedClipWidth = -1.0;
+            _cachedClipHeight = -1.0;
+            _cachedLoopAFt = null;
+            _cachedLoopBFt = null;
+            _cachedLoopLabelDpi = -1.0;
+        }
+
+        private FormattedText GetCachedMeasureLabel(int index, MeasureMarker measure, bool vertical, Brush brush, double dpi)
+        {
+            if (vertical)
+            {
+                if (_cachedVerticalMeasureLabels.Length < _score!.Measures.Count)
+                    _cachedVerticalMeasureLabels = new FormattedText?[_score.Measures.Count];
+
+                var existing = _cachedVerticalMeasureLabels[index];
+                if (existing != null)
+                    return existing;
+
+                string label = string.IsNullOrEmpty(measure.SectionText)
+                    ? $"小節 {measure.MeasureNumberText}"
+                    : $"小節 {measure.MeasureNumberText} · {measure.SectionText}";
+                var created = new FormattedText(
+                    label,
+                    CultureInfo.InvariantCulture,
+                    FlowDirection.LeftToRight,
+                    UiTypeface,
+                    11.0,
+                    brush,
+                    dpi);
+                _cachedVerticalMeasureLabels[index] = created;
+                return created;
+            }
+            else
+            {
+                if (_cachedHorizontalMeasureLabels.Length < _score!.Measures.Count)
+                    _cachedHorizontalMeasureLabels = new FormattedText?[_score.Measures.Count];
+
+                var existing = _cachedHorizontalMeasureLabels[index];
+                if (existing != null)
+                    return existing;
+
+                string label = string.IsNullOrEmpty(measure.SectionText)
+                    ? $"M.{measure.MeasureNumberText}"
+                    : $"M.{measure.MeasureNumberText} · {measure.SectionText}";
+                var created = new FormattedText(
+                    label,
+                    CultureInfo.InvariantCulture,
+                    FlowDirection.LeftToRight,
+                    UiTypeface,
+                    11.0,
+                    brush,
+                    dpi);
+                _cachedHorizontalMeasureLabels[index] = created;
+                return created;
+            }
+        }
+
+        private FormattedText GetCachedLoopLabel(char label, double dpi)
+        {
+            if (Math.Abs(_cachedLoopLabelDpi - dpi) > 0.001)
+            {
+                _cachedLoopAFt = null;
+                _cachedLoopBFt = null;
+                _cachedLoopLabelDpi = dpi;
+            }
+
+            FormattedText? ft = label == 'A' ? _cachedLoopAFt : _cachedLoopBFt;
+            if (ft == null)
+            {
+                ft = new FormattedText(
+                    label.ToString(),
+                    CultureInfo.InvariantCulture,
+                    FlowDirection.LeftToRight,
+                    UiTypeface,
+                    10.5,
+                    Brushes.White,
+                    dpi);
+                if (label == 'A')
+                    _cachedLoopAFt = ft;
+                else
+                    _cachedLoopBFt = ft;
+            }
+            return ft;
         }
 
         private FormattedText GetCachedPitchLabel(int pitch, double dpi, bool isDark)
@@ -262,6 +363,7 @@ namespace WinMusicXmlPlayer.Controls
             _loopEndSec = null;
             _isLoopEnabled = false;
             _hoveredNote = null;
+            InvalidateMeasureLabelCache();
             InvalidateVisual();
         }
 
@@ -575,8 +677,18 @@ namespace WinMusicXmlPlayer.Controls
             dc.DrawRectangle(_rulerBrush, null, new Rect(0, 0, w, rulerH));
             dc.DrawLine(MeasureLinePen, new Point(0, rollTop), new Point(w, rollTop));
 
-            // 啟用卷軸畫布裁剪區
-            dc.PushClip(new RectangleGeometry(new Rect(canvasLeft, 0, canvasW, h)));
+            // 啟用卷軸畫布裁剪區（幾何快取，僅在尺寸變更時重建）
+            if (_cachedClipGeometry == null ||
+                Math.Abs(_cachedClipWidth - w) > 0.01 ||
+                Math.Abs(_cachedClipHeight - h) > 0.01)
+            {
+                var clipGeometry = new RectangleGeometry(new Rect(canvasLeft, 0, canvasW, h));
+                clipGeometry.Freeze();
+                _cachedClipGeometry = clipGeometry;
+                _cachedClipWidth = w;
+                _cachedClipHeight = h;
+            }
+            dc.PushClip(_cachedClipGeometry);
 
             // 1B. 若有設定 A-B 循環點，繪製循環區間底色與標記線
             if (_loopStartSec.HasValue)
@@ -595,7 +707,7 @@ namespace WinMusicXmlPlayer.Controls
                     {
                         dc.DrawLine(LoopBoundaryPen, new Point(bx, rollTop), new Point(bx, h));
                         dc.DrawRoundedRectangle(LoopRulerBadgeBrush, null, new Rect(bx - 16, 4, 16, 18), 3, 3);
-                        var ftB = new FormattedText("B", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, UiTypeface, 10.5, Brushes.White, dpi);
+                        var ftB = GetCachedLoopLabel('B', dpi);
                         dc.DrawText(ftB, new Point(bx - 11, 5));
                     }
                 }
@@ -603,7 +715,7 @@ namespace WinMusicXmlPlayer.Controls
                 {
                     dc.DrawLine(LoopBoundaryPen, new Point(ax, rollTop), new Point(ax, h));
                     dc.DrawRoundedRectangle(LoopRulerBadgeBrush, null, new Rect(ax, 4, 16, 18), 3, 3);
-                    var ftA = new FormattedText("A", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, UiTypeface, 10.5, Brushes.White, dpi);
+                    var ftA = GetCachedLoopLabel('A', dpi);
                     dc.DrawText(ftA, new Point(ax + 4, 5));
                 }
             }
@@ -625,18 +737,7 @@ namespace WinMusicXmlPlayer.Controls
 
                 if (mx >= lastLabelRightX + 8)
                 {
-                    string mLabel = string.IsNullOrEmpty(meas.SectionText)
-                        ? $"M.{meas.MeasureNumberText}"
-                        : $"M.{meas.MeasureNumberText} · {meas.SectionText}";
-
-                    var ft = new FormattedText(
-                        mLabel,
-                        CultureInfo.InvariantCulture,
-                        FlowDirection.LeftToRight,
-                        UiTypeface,
-                        11.0,
-                        rulerLabelBrush,
-                        dpi);
+                    var ft = GetCachedMeasureLabel(m, meas, vertical: false, rulerLabelBrush, dpi);
 
                     double textRight = mx + 4 + ft.Width;
                     lastLabelRightX = textRight;
@@ -650,10 +751,12 @@ namespace WinMusicXmlPlayer.Controls
                 // 小節內拍線
                 if (meas.Beats > 1 && meas.DurationSeconds > 0.2)
                 {
-                    double beatSec = meas.DurationSeconds / meas.Beats;
+                    bool hasBeatTimes = meas.BeatLineTimes.Length == meas.Beats;
+                    double fallbackBeatSec = meas.DurationSeconds / meas.Beats;
                     for (int b = 1; b < meas.Beats; b++)
                     {
-                        double bx = mx + b * beatSec * pxPerSec;
+                        double beatOffsetSec = hasBeatTimes ? meas.BeatLineTimes[b] : b * fallbackBeatSec;
+                        double bx = mx + beatOffsetSec * pxPerSec;
                         if (bx >= canvasLeft && bx <= w)
                         {
                             dc.DrawLine(BeatLinePen, new Point(bx, rollTop), new Point(bx, h));
@@ -763,18 +866,7 @@ namespace WinMusicXmlPlayer.Controls
                 double my = h - (meas.StartTimeSeconds - _currentTimeSec) * pxPerSec;
                 dc.DrawLine(MeasureLinePen, new Point(0, my), new Point(w, my));
 
-                string mLabel = string.IsNullOrEmpty(meas.SectionText)
-                    ? $"小節 {meas.MeasureNumberText}"
-                    : $"小節 {meas.MeasureNumberText} · {meas.SectionText}";
-
-                var ft = new FormattedText(
-                    mLabel,
-                    CultureInfo.InvariantCulture,
-                    FlowDirection.LeftToRight,
-                    UiTypeface,
-                    11.0,
-                    measureTextBrush,
-                    dpi);
+                var ft = GetCachedMeasureLabel(m, meas, vertical: true, measureTextBrush, dpi);
                 dc.DrawText(ft, new Point(10, Math.Max(4, my - ft.Height - 2)));
             }
 

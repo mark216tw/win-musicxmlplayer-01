@@ -20,6 +20,10 @@ verification_report.txt
 *.musicxml
 *.mxl
 
+# Local score library & user SoundFonts (never commit)
+staffs/
+soundfonts/
+
 # IDE & OS files
 .vs/
 .idea/

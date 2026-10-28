@@ -1,7 +1,9 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using WinMusicXmlPlayer.Models;
 
 namespace WinMusicXmlPlayer.Services
@@ -124,31 +126,37 @@ namespace WinMusicXmlPlayer.Services
                 return (42, "大提琴 (Cello)", 92);
             }
 
-            // 4. 低音提琴 (Contrabass / Double Bass)
-            if (combined.Contains("contrabass") || combined.Contains("double bass") || combined.Contains("contrabbasso") || combined.Contains("basso") || combined.Contains("低音提琴"))
-            {
-                return (43, "低音提琴 (Contrabass)", 98);
-            }
-
-            // 5. 管樂與其他常見協奏樂器
+            // 4. 管樂與其他常見協奏樂器（注意：須於 Contrabass 的 "basso" 判斷前先檢查 "bassoon"，避免 Bassoon 被誤判為 Contrabass）
             if (combined.Contains("flute") || combined.Contains("flauto") || combined.Contains("長笛"))
                 return (73, "長笛 (Flute)", 48);
             if (combined.Contains("oboe") || combined.Contains("雙簧管"))
                 return (68, "雙簧管 (Oboe)", 72);
             if (combined.Contains("clarinet") || combined.Contains("clarinetto") || combined.Contains("單簧管"))
                 return (71, "單簧管 (Clarinet)", 54);
-            if (combined.Contains("bassoon") || combined.Contains("fagotto") || combined.Contains("低音管"))
+            if (combined.Contains("bassoon") || combined.Contains("fagotto") || combined.Contains("bsn") || combined.Contains("低音管") || combined.Contains("巴松管"))
                 return (70, "低音管 (Bassoon)", 80);
             if (combined.Contains("horn") || combined.Contains("corno") || combined.Contains("法國號"))
                 return (60, "法國號 (Horn)", 42);
             if (combined.Contains("trumpet") || combined.Contains("tromba") || combined.Contains("小號"))
                 return (56, "小號 (Trumpet)", 85);
+            if (combined.Contains("trombone") || combined.Contains("長號"))
+                return (57, "長號 (Trombone)", 88);
+            if (combined.Contains("tuba") || combined.Contains("低音號"))
+                return (58, "低音號 (Tuba)", 92);
+            if (combined.Contains("timpani") || combined.Contains("timp") || combined.Contains("定音鼓"))
+                return (47, "定音鼓 (Timpani)", 64);
             if (combined.Contains("harpsichord") || combined.Contains("cembalo") || combined.Contains("大鍵琴"))
                 return (6, "大鍵琴 (Harpsichord)", 64);
             if (combined.Contains("harp") || combined.Contains("arpa") || combined.Contains("豎琴"))
                 return (46, "豎琴 (Harp)", 50);
             if (combined.Contains("guitar") || combined.Contains("吉他"))
                 return (24, "古典吉他 (Guitar)", 64);
+
+            // 5. 低音提琴 (Contrabass / Double Bass)
+            if (combined.Contains("contrabass") || combined.Contains("double bass") || combined.Contains("contrabbasso") || combined.Contains("basso") || combined.Contains("cb.") || combined.Contains("低音提琴"))
+            {
+                return (43, "低音提琴 (Contrabass)", 98);
+            }
 
             // 6. 鋼琴 (Piano / Pianoforte / Klavier)
             if (combined.Contains("piano") || combined.Contains("pno") || combined.Contains("klavier") || combined.Contains("鋼琴"))
@@ -200,6 +208,11 @@ namespace WinMusicXmlPlayer.Services
             string baseDir = AppDomain.CurrentDomain.BaseDirectory;
             string workDir = Directory.GetCurrentDirectory();
 
+            // 優先使用內建 TimGM6mb.sf2，避免自動挑到使用者放入但損毀/靜音的大型 SF2
+            string? builtIn = FindBuiltInTimGmSoundFontPath();
+            if (!string.IsNullOrEmpty(builtIn) && TryValidateSoundFontFile(builtIn, out _))
+                return builtIn;
+
             string[] searchDirs = new[]
             {
                 Path.Combine(baseDir, "Assets", "SoundFonts"),
@@ -214,11 +227,199 @@ namespace WinMusicXmlPlayer.Services
                 var sf2Files = Directory.GetFiles(dir, "*.sf2")
                     .OrderByDescending(f => new FileInfo(f).Length) // 優先選用取樣最完整的大容量音源
                     .ToList();
-                if (sf2Files.Count > 0)
-                    return sf2Files[0];
+
+                foreach (string candidate in sf2Files)
+                {
+                    if (TryValidateSoundFontFile(candidate, out _))
+                        return candidate;
+                }
             }
 
             return null;
+        }
+
+        /// <summary>
+        /// 快速驗證 .sf2 音源檔是否含有實際非靜音取樣資料。
+        /// 部分損毀或空白下載的 SF2 雖可被合成器載入，但 smpl 區塊全為 0，播放時會完全無聲。
+        /// </summary>
+        public static bool TryValidateSoundFontFile(string sf2Path, out string errorMessage)
+        {
+            errorMessage = string.Empty;
+
+            if (string.IsNullOrWhiteSpace(sf2Path) || !File.Exists(sf2Path))
+            {
+                errorMessage = $"找不到音源檔案：{sf2Path}";
+                return false;
+            }
+
+            try
+            {
+                using var fs = new FileStream(sf2Path, FileMode.Open, FileAccess.Read, FileShare.Read);
+                using var reader = new BinaryReader(fs, Encoding.ASCII, leaveOpen: true);
+
+                if (fs.Length < 12)
+                {
+                    errorMessage = "此 .sf2 檔案太小，不是有效的 SoundFont 2 格式。";
+                    return false;
+                }
+
+                string riff = ReadFourCc(reader);
+                uint riffSize = reader.ReadUInt32();
+                string form = ReadFourCc(reader);
+
+                if (!string.Equals(riff, "RIFF", StringComparison.Ordinal) ||
+                    !string.Equals(form, "sfbk", StringComparison.Ordinal))
+                {
+                    errorMessage = "此檔案不是有效的 SoundFont 2 (.sf2) 格式。";
+                    return false;
+                }
+
+                long fileLength = fs.Length;
+                long riffEnd = Math.Min(fileLength, 8L + riffSize);
+                long position = 12;
+
+                bool foundSmplChunk = false;
+                bool hasAudibleSamples = false;
+                bool hasPresetHeaders = false;
+
+                while (position + 8 <= riffEnd)
+                {
+                    fs.Position = position;
+                    string chunkId = ReadFourCc(reader);
+                    uint chunkSize = reader.ReadUInt32();
+                    long dataPosition = fs.Position;
+                    long nextPosition = dataPosition + (long)chunkSize + (chunkSize % 2);
+
+                    if (nextPosition <= position)
+                        break;
+
+                    if (string.Equals(chunkId, "LIST", StringComparison.Ordinal) && chunkSize >= 4)
+                    {
+                        string listType = ReadFourCc(reader);
+                        long listEnd = Math.Min(fileLength, dataPosition + chunkSize);
+                        long subPosition = dataPosition + 4;
+
+                        if (string.Equals(listType, "sdta", StringComparison.Ordinal))
+                        {
+                            while (subPosition + 8 <= listEnd)
+                            {
+                                fs.Position = subPosition;
+                                string subChunkId = ReadFourCc(reader);
+                                uint subChunkSize = reader.ReadUInt32();
+                                long subDataPosition = fs.Position;
+                                long subNextPosition = subDataPosition + (long)subChunkSize + (subChunkSize % 2);
+
+                                if (subNextPosition <= subPosition)
+                                    break;
+
+                                if (string.Equals(subChunkId, "smpl", StringComparison.Ordinal))
+                                {
+                                    foundSmplChunk = true;
+                                    long sampleByteCount = Math.Min((long)subChunkSize, fileLength - subDataPosition) & ~1L;
+                                    if (sampleByteCount > 0 && HasNonZeroBytes(fs, subDataPosition, sampleByteCount))
+                                        hasAudibleSamples = true;
+                                }
+
+                                subPosition = subNextPosition;
+                            }
+                        }
+                        else if (string.Equals(listType, "pdta", StringComparison.Ordinal))
+                        {
+                            while (subPosition + 8 <= listEnd)
+                            {
+                                fs.Position = subPosition;
+                                string subChunkId = ReadFourCc(reader);
+                                uint subChunkSize = reader.ReadUInt32();
+                                long subDataPosition = fs.Position;
+                                long subNextPosition = subDataPosition + (long)subChunkSize + (subChunkSize % 2);
+
+                                if (subNextPosition <= subPosition)
+                                    break;
+
+                                if (string.Equals(subChunkId, "phdr", StringComparison.Ordinal))
+                                {
+                                    hasPresetHeaders = subChunkSize >= 38L * 2;
+                                }
+
+                                subPosition = subNextPosition;
+                            }
+                        }
+                    }
+                    else if (string.Equals(chunkId, "smpl", StringComparison.Ordinal))
+                    {
+                        foundSmplChunk = true;
+                        long sampleByteCount = Math.Min((long)chunkSize, fileLength - dataPosition) & ~1L;
+                        if (sampleByteCount > 0 && HasNonZeroBytes(fs, dataPosition, sampleByteCount))
+                            hasAudibleSamples = true;
+                    }
+
+                    position = nextPosition;
+                }
+
+                if (!foundSmplChunk)
+                {
+                    errorMessage = "此 .sf2 檔案缺少音訊取樣資料區塊 (smpl)，無法發出聲音。";
+                    return false;
+                }
+
+                if (!hasAudibleSamples)
+                {
+                    errorMessage = "此 .sf2 檔案的全部取樣資料均為靜音 (0)，可能下載損毀或來源檔案不完整，請重新下載有效的音源檔。";
+                    return false;
+                }
+
+                if (!hasPresetHeaders)
+                {
+                    errorMessage = "此 .sf2 檔案缺少 Preset 樂器定義 (phdr)，無法發出聲音。";
+                    return false;
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                errorMessage = $"讀取音源檔失敗：{ex.Message}";
+                return false;
+            }
+        }
+
+        private static string ReadFourCc(BinaryReader reader)
+        {
+            return Encoding.ASCII.GetString(reader.ReadBytes(4));
+        }
+
+        private static bool HasNonZeroBytes(FileStream fs, long offset, long byteCount)
+        {
+            if (byteCount <= 0)
+                return false;
+
+            byte[] buffer = ArrayPool<byte>.Shared.Rent(1024 * 1024);
+            try
+            {
+                long position = offset;
+                long remaining = byteCount;
+
+                while (remaining > 0)
+                {
+                    int toRead = (int)Math.Min(buffer.Length, remaining);
+                    fs.Position = position;
+                    int read = fs.Read(buffer, 0, toRead);
+                    if (read <= 0)
+                        break;
+
+                    if (buffer.AsSpan(0, read).IndexOfAnyExcept((byte)0) >= 0)
+                        return true;
+
+                    position += read;
+                    remaining -= read;
+                }
+
+                return false;
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
         }
     }
 }

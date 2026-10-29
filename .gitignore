@@ -4,7 +4,7 @@
 [Pp]ublish/
 [Rr]elease/
 
-# Root compiled app outputs (keep third-party MeltySynth.dll & NAudio.*.dll)
+# Root compiled app outputs (keep third-party NAudio.*.dll)
 WinMusicXmlPlayer.exe
 WinMusicXmlPlayer.dll
 WinMusicXmlPlayer.pdb

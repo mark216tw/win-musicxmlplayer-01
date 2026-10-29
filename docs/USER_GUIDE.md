@@ -12,7 +12,7 @@
 - **音訊裝置**：支援 WASAPI 或 WaveOut 之音效卡 / 耳機 / 喇叭
 
 ### 啟動步驟
-1. 解壓縮發行版壓縮檔 `WinMusicXmlPlayer-v1.2.0-win-x64.zip`。
+1. 解壓縮發行版壓縮檔 `WinMusicXmlPlayer-v1.2.1-win-x64.zip`。
 2. 確認 `Assets\SoundFonts\TimGM6mb.sf2` 隨附於程式目錄下。
 3. 雙擊 `WinMusicXmlPlayer.exe` 啟動程式；啟動後左下角狀態列會顯示：`目前音源：TimGM6mb.sf2 (真實樂器取樣)`。
 4. 若上次成功開啟的樂譜仍存在，啟動時會自動載入並停在 `00:00.0`（不自動播放）；若檔案已不存在或無法讀取，則維持空白畫面。

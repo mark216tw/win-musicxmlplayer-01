@@ -5,6 +5,36 @@
 
 ---
 
+## 📅 2026-10-29 — v1.2.1 MuseScore 鋼琴無聲修正與 MeltySynth 原始碼內嵌
+
+### 🎯 問題與根因
+使用者回報載入 `MuseScore_General.sf2` 與 `MS_Basic.sf2` 後鋼琴沒有聲音。解析 SF2 後確認兩者都包含 bank 0 / patch 0 的 `Grand Piano`，且取樣資料、鍵域與 loop 範圍皆正常。以 MeltySynth 2.4.1 實測發現問題只發生在中力度層：
+
+- `mf`／`f`（velocity 75–107）的 preset zone 設定了負向 modulation envelope → filter cutoff（`op11 = -2350`）。
+- 鋼琴 instrument 全域初始截止頻率為 `op8 = 6237`（約 300 Hz），mod-envelope sustain 為 100%（`op29 = 1000`）。
+- 兩者相乘後穩態截止頻率被壓到約 77 Hz，鋼琴聲音幾乎被濾除；velocity 108+ 的 FF 層設定 `op11 = +900`，因此仍可發聲。
+
+### 🛠 修正
+1. 將 MeltySynth 2.4.1（commit `1ad7ba0`）原始碼內嵌至 `third_party/MeltySynth/`，移除原本的 `MeltySynth.dll` 參考。
+2. 於 `third_party/MeltySynth/src/Voice.cs` 加入持續濾波截止頻率保護：負向 mod-env → cutoff 若會使穩態 cutoff 低於 100 Hz，則忽略該調變。
+3. 新增 `--verify-soundfont [path]` 驗證模式，輸出 velocity 60–125 的峰值並檢查 mf/f 力度與單調性。
+4. 更新第三方授權聲明、架構文件與版本資訊。
+
+### ✅ 驗證
+- velocity 96 峰值：`MuseScore_General` 由 `-38.1` 提升至 `-16.5 dBFS`；`MS_Basic` 由 `-40.5` 提升至 `-18.3 dBFS`。
+- velocity 120 維持原本音量；TimGM6mb 與其他音源不受影響。
+- `dotnet build -c Release`：0 警告、0 錯誤；`--verify-all` 全數通過。
+
+### 📂 異動檔案
+- [`third_party/MeltySynth/src/Voice.cs`](../third_party/MeltySynth/src/Voice.cs)
+- [`App.xaml.cs`](../App.xaml.cs)
+- [`WinMusicXmlPlayer.csproj`](../WinMusicXmlPlayer.csproj)
+- [`docs/THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)
+- [`docs/ARCHITECTURE.md`](ARCHITECTURE.md)
+- [`CHANGELOG.md`](../CHANGELOG.md)
+
+---
+
 ## 📅 2026-10-28 (深夜) — v1.2.0 演奏表情與音樂性提升（A1–A4 + B5–B7）
 
 ### 🎯 修改動機與背景
@@ -204,7 +234,7 @@
    - 於「偏好設定」視窗新增「殘響 Reverb（CC91）」與「合唱 Chorus（CC93）」即時調整滑桿。
 
 ### 📂 異動檔案
-- [`MeltySynth.dll`](../MeltySynth.dll)
+- [`third_party/MeltySynth/src/Voice.cs`](../third_party/MeltySynth/src/Voice.cs)
 - [`Models/ScoreModels.cs`](../Models/ScoreModels.cs)
 - [`Services/AudioEngine.cs`](../Services/AudioEngine.cs)
 - [`Services/MusicXmlLoader.cs`](../Services/MusicXmlLoader.cs)

@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Windows;
+using MeltySynth;
 using WinMusicXmlPlayer.Models;
 using WinMusicXmlPlayer.Services;
 
@@ -45,6 +46,15 @@ namespace WinMusicXmlPlayer
                 }
                 win.Close();
                 Shutdown(0);
+                return;
+            }
+
+            int verifySoundFontIndex = Array.FindIndex(e.Args, a => string.Equals(a, "--verify-soundfont", StringComparison.OrdinalIgnoreCase));
+            if (verifySoundFontIndex >= 0)
+            {
+                string? soundFontPath = verifySoundFontIndex + 1 < e.Args.Length ? e.Args[verifySoundFontIndex + 1] : null;
+                int exitCode = RunSoundFontVerification(soundFontPath);
+                Shutdown(exitCode);
                 return;
             }
 
@@ -159,6 +169,147 @@ namespace WinMusicXmlPlayer
                 sb.AppendLine($"[EXCEPTION] {ex}");
                 File.WriteAllText("verification_report.txt", sb.ToString(), Encoding.UTF8);
                 return 99;
+            }
+        }
+
+        private static int RunSoundFontVerification(string? explicitPath)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("=== SoundFont Piano Verification ===");
+
+            var paths = new List<string>();
+            if (!string.IsNullOrWhiteSpace(explicitPath))
+            {
+                paths.Add(explicitPath);
+            }
+            else
+            {
+                string cwd = Directory.GetCurrentDirectory();
+                string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+                AddIfExists(paths, Path.Combine(cwd, "soundfonts", "MuseScore_General.sf2"));
+                AddIfExists(paths, Path.Combine(cwd, "soundfonts", "MS_Basic.sf2"));
+                string? timGm = SoundFontManager.FindBuiltInTimGmSoundFontPath();
+                if (!string.IsNullOrWhiteSpace(timGm))
+                    paths.Add(timGm);
+                AddIfExists(paths, Path.Combine(baseDir, "soundfonts", "MuseScore_General.sf2"));
+                AddIfExists(paths, Path.Combine(baseDir, "soundfonts", "MS_Basic.sf2"));
+            }
+
+            paths = paths.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            if (paths.Count == 0)
+            {
+                sb.AppendLine("[FAIL] No .sf2 file found.");
+                File.WriteAllText("verification_report.txt", sb.ToString(), Encoding.UTF8);
+                return 1;
+            }
+
+            bool allPassed = true;
+            foreach (string path in paths)
+            {
+                allPassed &= VerifyPianoVelocityResponse(path, sb);
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                GC.Collect();
+            }
+
+            sb.AppendLine(allPassed
+                ? "[ALL PASS] Piano velocity response is audible and monotonic."
+                : "[FAIL] Piano velocity response check failed.");
+            File.WriteAllText("verification_report.txt", sb.ToString(), Encoding.UTF8);
+            return allPassed ? 0 : 4;
+        }
+
+        private static void AddIfExists(List<string> paths, string path)
+        {
+            if (File.Exists(path))
+                paths.Add(path);
+        }
+
+        private static bool VerifyPianoVelocityResponse(string path, StringBuilder sb)
+        {
+            sb.AppendLine("--------------------------------------------------");
+            sb.AppendLine($"[INFO] File: {path}");
+
+            try
+            {
+                var soundFont = new SoundFont(path);
+                var preset = soundFont.Presets.FirstOrDefault(p => p.BankNumber == 0 && p.PatchNumber == 0);
+                if (preset == null)
+                {
+                    sb.AppendLine("[FAIL] Bank 0 / Patch 0 preset not found.");
+                    return false;
+                }
+
+                sb.AppendLine($"  Preset: {preset.Name} | Regions: {preset.Regions.Count} | Samples: {soundFont.SampleHeaders.Count}");
+
+                var settings = new SynthesizerSettings(44100)
+                {
+                    EnableReverbAndChorus = true,
+                    MaximumPolyphony = 128
+                };
+                var synth = new Synthesizer(soundFont, settings)
+                {
+                    MasterVolume = 1.05F
+                };
+                synth.ProcessMidiMessage(0, 0xB0, 0x00, 0);
+                synth.ProcessMidiMessage(0, 0xB0, 0x20, 0);
+                synth.ProcessMidiMessage(0, 0xC0, 0, 0);
+                synth.ProcessMidiMessage(0, 0xB0, 0x0B, 127);
+                synth.ProcessMidiMessage(0, 0xB0, 0x07, 115);
+
+                const int sampleRate = 44100;
+                int frames = sampleRate / 2;
+                float[] left = new float[frames];
+                float[] right = new float[frames];
+                var peaks = new List<(int Velocity, double Db)>();
+
+                int[] velocities = { 60, 65, 70, 75, 80, 85, 90, 95, 96, 100, 105, 110, 115, 120, 125 };
+                foreach (int velocity in velocities)
+                {
+                    synth.NoteOffAll(true);
+                    synth.NoteOn(0, 60, velocity);
+                    synth.Render(left.AsSpan(), right.AsSpan());
+
+                    float peak = 0F;
+                    for (int i = 0; i < frames; i++)
+                    {
+                        float absLeft = Math.Abs(left[i]);
+                        float absRight = Math.Abs(right[i]);
+                        if (absLeft > peak) peak = absLeft;
+                        if (absRight > peak) peak = absRight;
+                    }
+
+                    double db = 20.0 * Math.Log10(Math.Max(peak, 1.0E-9F));
+                    peaks.Add((velocity, db));
+                    sb.AppendLine($"  Velocity {velocity,3}: {db,7:F1} dBFS");
+                }
+
+                bool passed = true;
+                foreach (var (velocity, db) in peaks)
+                {
+                    if (velocity is >= 75 and <= 107 && db < -30.0)
+                    {
+                        sb.AppendLine($"[FAIL] Velocity {velocity} is too quiet ({db:F1} dBFS, expected >= -30.0).");
+                        passed = false;
+                    }
+                }
+
+                for (int i = 1; i < peaks.Count; i++)
+                {
+                    if (peaks[i].Db < peaks[i - 1].Db - 3.0)
+                    {
+                        sb.AppendLine($"[FAIL] Velocity {peaks[i].Velocity} drops {peaks[i - 1].Db - peaks[i].Db:F1} dB from velocity {peaks[i - 1].Velocity}.");
+                        passed = false;
+                    }
+                }
+
+                sb.AppendLine(passed ? "[PASS] Piano velocity response OK." : "[FAIL] Piano velocity response not OK.");
+                return passed;
+            }
+            catch (Exception ex)
+            {
+                sb.AppendLine($"[FAIL] Verification exception: {ex.Message}");
+                return false;
             }
         }
 

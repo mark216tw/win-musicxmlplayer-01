@@ -10,7 +10,7 @@
 | :--- | :--- | :--- | :--- |
 | **應用框架** | .NET / WPF (Windows Presentation Foundation) | .NET 8.0 (`net8.0-windows`) | 桌面 UI 框架、硬體加速向量繪圖 (`DrawingContext`) 與資源管理 |
 | **高 DPI 支援** | PerMonitorV2 | Windows 10/11 原生 | 跨螢幕不同縮放比例下的文字與線條像素級清晰度 (`PixelsPerDip`) |
-| **波表合成器** | MeltySynth | 2.4.1 | 純 C# SoundFont 2 (`.sf2`) 即時波表合成、128 複音、Reverb / Chorus 效果器 |
+| **波表合成器** | MeltySynth（內嵌原始碼） | 2.4.1 | 純 C# SoundFont 2 (`.sf2`) 即時波表合成、128 複音、Reverb / Chorus 效果器 |
 | **音訊輸出層** | NAudio (`WasapiOut` / `WaveOutEvent`) | 2.2.1 | 44.1 kHz、32-bit IEEE Float 雙聲道低延遲共享模式音訊串流 |
 | **樂譜解析** | `System.Xml.Linq` (`XDocument`) + `ZipArchive` | .NET 8 內建 | 解析 `.musicxml`、`.xml` 與壓縮容器 `.mxl` |
 | **原生視窗整合** | Windows DWM API (`dwmapi.dll`) | Win32 P/Invoke | 動態控制原生標題列深淺色、標題列背景色、邊框色與視窗圓角策略 |

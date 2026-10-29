@@ -95,7 +95,7 @@ win-musicxmlplayer-01/
 ## 🚀 快速開始
 
 ### 方式一：直接下載 Release 執行檔
-1. 前往本專案的 **GitHub Releases** 頁面下載最新版本的 `WinMusicXmlPlayer-v1.2.0-win-x64.zip`。
+1. 前往本專案的 **GitHub Releases** 頁面下載最新版本的 `WinMusicXmlPlayer-v1.2.1-win-x64.zip`。
 2. 解壓縮後直接執行 `WinMusicXmlPlayer.exe`（已內建 `Assets/SoundFonts/TimGM6mb.sf2` 音源）。
 3. 點擊左上角 **「開啟 MusicXML」**（或按 `Ctrl+O`，亦可直接將 `.musicxml` / `.mxl` 檔案拖曳至視窗中），再點擊底部 **「▶ 播放」** 即可聆聽演奏。
 

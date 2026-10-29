@@ -8,7 +8,7 @@
     <UseWPF>true</UseWPF>
     <AssemblyName>WinMusicXmlPlayer</AssemblyName>
     <RootNamespace>WinMusicXmlPlayer</RootNamespace>
-    <Version>1.2.0</Version>
+    <Version>1.2.1</Version>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
     <NuGetAudit>false</NuGetAudit>
@@ -19,10 +19,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Reference Include="MeltySynth">
-      <HintPath>MeltySynth.dll</HintPath>
-      <Private>true</Private>
-    </Reference>
     <Reference Include="NAudio.Core">
       <HintPath>NAudio.Core.dll</HintPath>
       <Private>true</Private>

@@ -9,6 +9,9 @@
 - **作者**：Sinshu (Nobuaki Tanaka)
 - **專案網址**：https://github.com/sinshu/meltysynth
 - **授權條款**：MIT License
+- **內嵌版本**：2.4.1（commit `1ad7ba0b9f7324461b08aeca75a220ab1253de56`）
+- **原始碼位置**：`third_party/MeltySynth/src/`
+- **本專案修改**：於 `Voice.cs` 加入持續濾波截止頻率保護。當負向 modulation envelope → filter cutoff 會使穩態截止頻率低於 100 Hz 時忽略該調變，避免 `MuseScore_General.sf2` / `MS_Basic.sf2` 的中等力度鋼琴層幾乎無聲。其餘合成邏輯未變更。
 
 ```text
 MIT License

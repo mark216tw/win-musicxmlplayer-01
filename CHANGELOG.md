@@ -2,6 +2,19 @@
 
 本文件記錄 **Windows MusicXML 真實音源播放器 (WinMusicXmlPlayer)** 的版本演進與功能變更。
 
+## [v1.2.1] - 2026-10-29
+
+### 🐞 修正
+- 修正 `MuseScore_General.sf2` 與 `MS_Basic.sf2` 在 `mf`／`f`（velocity 75–107）力度下鋼琴幾乎無聲的問題。
+  - **根因**：這兩個音源的鋼琴 preset 在中等力度層設定負向 modulation envelope → filter cutoff（`op11 = -2350`），搭配約 300 Hz 的初始截止頻率與 100% mod-envelope sustain，會把穩態低通截止頻率壓到約 77 Hz，導致聲音被大幅濾除。
+  - **修正**：內嵌 MeltySynth 2.4.1 原始碼，於 `Voice.cs` 加入持續濾波截止頻率保護；當負向調變會使穩態 cutoff 低於 100 Hz 時忽略該調變。其他音源與 FF（velocity 108+）層不受影響。
+  - **驗證**：修正後 velocity 96 峰值由 `-38.1`／`-40.5 dBFS` 提升至 `-16.5`／`-18.3 dBFS`，力度曲線恢復單調；TimGM6mb、YDP-GrandPiano、GeneralUser-GS、SGM、Aspirin、Aegean 皆不受影響。
+- 移除發行版中的 `MeltySynth.dll`，改由內嵌原始碼編譯，避免二進位與修正版本不一致。
+
+### 🛠 開發與驗證
+- 新增 `--verify-soundfont [path]` 診斷模式，輸出 bank 0 / patch 0 preset 在 velocity 60–125 的峰值，並檢查 `mf`／`f` 力度是否過低與力度曲線是否單調。
+- 更新第三方授權聲明、架構文件與開發日誌，註明 MeltySynth 原始碼內嵌版本與本專案修改。
+
 ## [v1.2.0] - 2026-10-28
 
 ### 🎬 影音極致同步（A/V Sync）

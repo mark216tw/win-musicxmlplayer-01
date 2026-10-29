@@ -11,7 +11,7 @@
 - **授權條款**：MIT License
 - **內嵌版本**：2.4.1（commit `1ad7ba0b9f7324461b08aeca75a220ab1253de56`）
 - **原始碼位置**：`third_party/MeltySynth/src/`
-- **本專案修改**：於 `Voice.cs` 加入持續濾波截止頻率保護。當負向 modulation envelope → filter cutoff 會使穩態截止頻率低於 100 Hz 時忽略該調變，避免 `MuseScore_General.sf2` / `MS_Basic.sf2` 的中等力度鋼琴層幾乎無聲。其餘合成邏輯未變更。
+- **本專案修改**：於 `SynthesizerSettings` 新增 `MinimumFilterCutoffHz` 與 `FilterCutoffFloorMaxProgram`，並在 `Voice.cs` 對指定 GM program 套用濾波器截止下限。此機制用於修正 `MuseScore_General.sf2` / `MuseScore_General_Full.sf2` / `MS_Basic.sf2` 鋼琴約 300 Hz 的過低初始截止頻率；未啟用下限時行為與原始碼一致。
 
 ```text
 MIT License

@@ -15,6 +15,8 @@ namespace WinMusicXmlPlayer.Services
         private readonly int _sampleRate = 44100;
         private readonly WaveFormat _waveFormat;
 
+        public const float MuseScorePianoFilterCutoffFloorHz = 4000F;
+
         // 通用樂器音源 (General MIDI SoundFont)
         private SoundFont? _soundFont;
         private Synthesizer? _synth;
@@ -383,6 +385,31 @@ namespace WinMusicXmlPlayer.Services
             }
         }
 
+        public static bool IsMuseScoreSoundFont(SoundFont soundFont, string? path = null)
+        {
+            if (soundFont.Info.BankName.Contains("MuseScore", StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            if (string.IsNullOrEmpty(path))
+                return false;
+
+            string fileName = Path.GetFileName(path);
+            return fileName.Contains("MuseScore", StringComparison.OrdinalIgnoreCase) ||
+                   fileName.StartsWith("MS_Basic", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private SynthesizerSettings CreateSynthesizerSettings(SoundFont soundFont, string? path)
+        {
+            bool isMuseScore = IsMuseScoreSoundFont(soundFont, path);
+            return new SynthesizerSettings(_sampleRate)
+            {
+                EnableReverbAndChorus = true,
+                MaximumPolyphony = 128,
+                MinimumFilterCutoffHz = isMuseScore ? MuseScorePianoFilterCutoffFloorHz : 0F,
+                FilterCutoffFloorMaxProgram = isMuseScore ? 5 : 127
+            };
+        }
+
         public bool LoadSoundFont(string sf2Path, out string errorMessage)
         {
             errorMessage = string.Empty;
@@ -401,11 +428,7 @@ namespace WinMusicXmlPlayer.Services
                     return false;
                 }
 
-                var settings = new SynthesizerSettings(_sampleRate)
-                {
-                    EnableReverbAndChorus = true,
-                    MaximumPolyphony = 128
-                };
+                var settings = CreateSynthesizerSettings(newSf, sf2Path);
                 var newSynth = new Synthesizer(newSf, settings)
                 {
                     MasterVolume = (float)(1.05 * _masterVolume)
@@ -453,11 +476,7 @@ namespace WinMusicXmlPlayer.Services
                     return false;
                 }
 
-                var settings = new SynthesizerSettings(_sampleRate)
-                {
-                    EnableReverbAndChorus = true,
-                    MaximumPolyphony = 128
-                };
+                var settings = CreateSynthesizerSettings(newSf, sf2Path);
                 var newSynth = new Synthesizer(newSf, settings)
                 {
                     MasterVolume = (float)(1.05 * _masterVolume)
@@ -1312,6 +1331,8 @@ namespace WinMusicXmlPlayer.Services
             MusicScore? scoreSnap;
             SoundFont? generalSfSnap;
             SoundFont? pianoSfSnap;
+            string generalSfPathSnap;
+            string pianoSfPathSnap;
             double speedSnap;
             double masterVolSnap;
             int reverbSnap;
@@ -1322,6 +1343,8 @@ namespace WinMusicXmlPlayer.Services
                 scoreSnap = _score;
                 generalSfSnap = _soundFont;
                 pianoSfSnap = _pianoSoundFont;
+                generalSfPathSnap = _currentSoundFontPath;
+                pianoSfPathSnap = _pianoSoundFontPath;
                 speedSnap = _playbackSpeed;
                 masterVolSnap = _masterVolume;
                 reverbSnap = _reverbAmount;
@@ -1350,29 +1373,26 @@ namespace WinMusicXmlPlayer.Services
                     ChorusAmount = chorusSnap
                 };
 
-                var settings = new SynthesizerSettings(_sampleRate)
-                {
-                    EnableReverbAndChorus = true,
-                    MaximumPolyphony = 128
-                };
-
                 if (generalSfSnap != null)
                 {
+                    var generalSettings = CreateSynthesizerSettings(generalSfSnap, generalSfPathSnap);
                     offlineEngine._soundFont = generalSfSnap;
-                    offlineEngine._synth = new Synthesizer(generalSfSnap, settings)
+                    offlineEngine._synth = new Synthesizer(generalSfSnap, generalSettings)
                     {
                         MasterVolume = (float)(1.05 * masterVolSnap)
                     };
+                    offlineEngine._currentSoundFontPath = generalSfPathSnap;
                 }
 
                 if (pianoSfSnap != null)
                 {
+                    var pianoSettings = CreateSynthesizerSettings(pianoSfSnap, pianoSfPathSnap);
                     offlineEngine._pianoSoundFont = pianoSfSnap;
-                    offlineEngine._pianoSynth = new Synthesizer(pianoSfSnap, settings)
+                    offlineEngine._pianoSynth = new Synthesizer(pianoSfSnap, pianoSettings)
                     {
                         MasterVolume = (float)(1.05 * masterVolSnap)
                     };
-                    offlineEngine._pianoSoundFontPath = _pianoSoundFontPath;
+                    offlineEngine._pianoSoundFontPath = pianoSfPathSnap;
                 }
 
                 offlineEngine.LoadScore(scoreSnap);

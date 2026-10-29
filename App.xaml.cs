@@ -242,10 +242,13 @@ namespace WinMusicXmlPlayer
 
                 sb.AppendLine($"  Preset: {preset.Name} | Regions: {preset.Regions.Count} | Samples: {soundFont.SampleHeaders.Count}");
 
+                bool isMuseScore = AudioEngine.IsMuseScoreSoundFont(soundFont, path);
                 var settings = new SynthesizerSettings(44100)
                 {
                     EnableReverbAndChorus = true,
-                    MaximumPolyphony = 128
+                    MaximumPolyphony = 128,
+                    MinimumFilterCutoffHz = isMuseScore ? AudioEngine.MuseScorePianoFilterCutoffFloorHz : 0F,
+                    FilterCutoffFloorMaxProgram = isMuseScore ? 5 : 127
                 };
                 var synth = new Synthesizer(soundFont, settings)
                 {
@@ -262,6 +265,7 @@ namespace WinMusicXmlPlayer
                 float[] left = new float[frames];
                 float[] right = new float[frames];
                 var peaks = new List<(int Velocity, double Db)>();
+                double spectralCentroid96 = 0.0;
 
                 int[] velocities = { 60, 65, 70, 75, 80, 85, 90, 95, 96, 100, 105, 110, 115, 120, 125 };
                 foreach (int velocity in velocities)
@@ -269,6 +273,11 @@ namespace WinMusicXmlPlayer
                     synth.NoteOffAll(true);
                     synth.NoteOn(0, 60, velocity);
                     synth.Render(left.AsSpan(), right.AsSpan());
+
+                    if (velocity == 96)
+                    {
+                        spectralCentroid96 = ComputeSpectralCentroid(left, right, sampleRate);
+                    }
 
                     float peak = 0F;
                     for (int i = 0; i < frames; i++)
@@ -303,6 +312,7 @@ namespace WinMusicXmlPlayer
                     }
                 }
 
+                sb.AppendLine($"  Spectral centroid @ velocity 96: {spectralCentroid96:F0} Hz");
                 sb.AppendLine(passed ? "[PASS] Piano velocity response OK." : "[FAIL] Piano velocity response not OK.");
                 return passed;
             }
@@ -310,6 +320,89 @@ namespace WinMusicXmlPlayer
             {
                 sb.AppendLine($"[FAIL] Verification exception: {ex.Message}");
                 return false;
+            }
+        }
+
+        private static double ComputeSpectralCentroid(float[] left, float[] right, int sampleRate)
+        {
+            const int fftSize = 4096;
+            if (left.Length < fftSize || right.Length < fftSize)
+                return 0.0;
+
+            int start = left.Length - fftSize;
+            double[] re = new double[fftSize];
+            double[] im = new double[fftSize];
+
+            for (int i = 0; i < fftSize; i++)
+            {
+                double window = 0.5 - 0.5 * Math.Cos(2.0 * Math.PI * i / (fftSize - 1));
+                double sample = 0.5 * (left[start + i] + right[start + i]);
+                re[i] = sample * window;
+            }
+
+            Fft(re, im);
+
+            double weightedSum = 0.0;
+            double magnitudeSum = 0.0;
+            for (int k = 1; k < fftSize / 2; k++)
+            {
+                double magnitude = re[k] * re[k] + im[k] * im[k];
+                double frequency = (double)k * sampleRate / fftSize;
+                weightedSum += frequency * magnitude;
+                magnitudeSum += magnitude;
+            }
+
+            return magnitudeSum > 1.0E-12 ? weightedSum / magnitudeSum : 0.0;
+        }
+
+        private static void Fft(double[] re, double[] im)
+        {
+            int n = re.Length;
+            for (int i = 1, j = 0; i < n; i++)
+            {
+                int bit = n >> 1;
+                for (; (j & bit) != 0; bit >>= 1)
+                {
+                    j ^= bit;
+                }
+                j ^= bit;
+
+                if (i < j)
+                {
+                    (re[i], re[j]) = (re[j], re[i]);
+                    (im[i], im[j]) = (im[j], im[i]);
+                }
+            }
+
+            for (int length = 2; length <= n; length <<= 1)
+            {
+                double angle = -2.0 * Math.PI / length;
+                double wLengthRe = Math.Cos(angle);
+                double wLengthIm = Math.Sin(angle);
+
+                for (int i = 0; i < n; i += length)
+                {
+                    double wRe = 1.0;
+                    double wIm = 0.0;
+
+                    for (int j = 0; j < length / 2; j++)
+                    {
+                        int u = i + j;
+                        int v = i + j + length / 2;
+
+                        double tRe = wRe * re[v] - wIm * im[v];
+                        double tIm = wRe * im[v] + wIm * re[v];
+
+                        re[v] = re[u] - tRe;
+                        im[v] = im[u] - tIm;
+                        re[u] += tRe;
+                        im[u] += tIm;
+
+                        double nextWRe = wRe * wLengthRe - wIm * wLengthIm;
+                        wIm = wRe * wLengthIm + wIm * wLengthRe;
+                        wRe = nextWRe;
+                    }
+                }
             }
         }
 

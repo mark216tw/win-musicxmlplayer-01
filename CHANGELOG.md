@@ -5,14 +5,16 @@
 ## [v1.2.1] - 2026-10-29
 
 ### 🐞 修正
-- 修正 `MuseScore_General.sf2` 與 `MS_Basic.sf2` 在 `mf`／`f`（velocity 75–107）力度下鋼琴幾乎無聲的問題。
-  - **根因**：這兩個音源的鋼琴 preset 在中等力度層設定負向 modulation envelope → filter cutoff（`op11 = -2350`），搭配約 300 Hz 的初始截止頻率與 100% mod-envelope sustain，會把穩態低通截止頻率壓到約 77 Hz，導致聲音被大幅濾除。
-  - **修正**：內嵌 MeltySynth 2.4.1 原始碼，於 `Voice.cs` 加入持續濾波截止頻率保護；當負向調變會使穩態 cutoff 低於 100 Hz 時忽略該調變。其他音源與 FF（velocity 108+）層不受影響。
-  - **驗證**：修正後 velocity 96 峰值由 `-38.1`／`-40.5 dBFS` 提升至 `-16.5`／`-18.3 dBFS`，力度曲線恢復單調；TimGM6mb、YDP-GrandPiano、GeneralUser-GS、SGM、Aspirin、Aegean 皆不受影響。
+- 修正 `MuseScore_General.sf2`、`MuseScore_General_Full.sf2` 與 `MS_Basic.sf2` 鋼琴聲音悶、音量偏小的問題。
+  - **根因**：MuseScore 系列音源的 Grand Piano instrument 全域將 `initialFilterFc` 設為 `op8 = 6237 cents`（約 300 Hz），幾乎濾除所有泛音；其他音源多為 12–20 kHz，因此聽感正常。
+  - **修正**：於 MeltySynth 新增 `SynthesizerSettings.MinimumFilterCutoffHz` 與 `FilterCutoffFloorMaxProgram`；`AudioEngine` 偵測 BankName／檔名含 `MuseScore` 時，僅對 GM 鋼琴 0–5 套用 **4 kHz 濾波器下限**。其他音源、非鋼琴樂器與打擊通道完全不受影響。
+  - **取代初版保護**：v1.2.1 初版曾以 100 Hz 穩態截止特例避免 cutoff 掉到 77 Hz；本次改由通用 4 kHz 下限處理，避免與後續音源相容性修正互相干擾。
+  - **驗證**：修正後 velocity 96 頻譜重心由約 300 Hz 提升至 `569 Hz`，與 TimGM6mb（`546 Hz`）、YDP-GrandPiano（`712 Hz`）相當；`MS_Basic` 為 `566 Hz`。velocity 96 峰值為 `-17.8`／`-20.0 dBFS`，力度曲線維持單調。
 - 移除發行版中的 `MeltySynth.dll`，改由內嵌原始碼編譯，避免二進位與修正版本不一致。
 
 ### 🛠 開發與驗證
-- 新增 `--verify-soundfont [path]` 診斷模式，輸出 bank 0 / patch 0 preset 在 velocity 60–125 的峰值，並檢查 `mf`／`f` 力度是否過低與力度曲線是否單調。
+- 新增 `--verify-soundfont [path]` 診斷模式，輸出 bank 0 / patch 0 preset 在 velocity 60–125 的峰值與 velocity 96 頻譜重心（spectral centroid），並檢查力度是否過低與曲線是否單調。
+- Release 建置 0 警告、0 錯誤；`--verify-all` 與 `MuseScore_General`／`MS_Basic`／TimGM6mb 音源驗證全數通過。
 - 更新第三方授權聲明、架構文件與開發日誌，註明 MeltySynth 原始碼內嵌版本與本專案修改。
 
 ## [v1.2.0] - 2026-10-28

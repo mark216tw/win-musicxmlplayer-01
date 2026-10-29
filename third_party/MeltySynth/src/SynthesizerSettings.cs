@@ -15,6 +15,8 @@ namespace MeltySynth
         private int blockSize;
         private int maximumPolyphony;
         private bool enableReverbAndChorus;
+        private float minimumFilterCutoffHz;
+        private int filterCutoffFloorMaxProgram;
 
         /// <summary>
         /// Initializes a new instance of synthesizer settings.
@@ -28,6 +30,8 @@ namespace MeltySynth
             this.blockSize = DefaultBlockSize;
             this.maximumPolyphony = DefaultMaximumPolyphony;
             this.enableReverbAndChorus = DefaultEnableReverbAndChorus;
+            this.minimumFilterCutoffHz = 0F;
+            this.filterCutoffFloorMaxProgram = 127;
         }
 
         private static void CheckSampleRate(int value)
@@ -103,6 +107,44 @@ namespace MeltySynth
         {
             get => enableReverbAndChorus;
             set => enableReverbAndChorus = value;
+        }
+
+        /// <summary>
+        /// Gets or sets the minimum low-pass filter cutoff frequency, in Hz.
+        /// A value of 0 disables the floor and keeps the SoundFont's original cutoff.
+        /// </summary>
+        public float MinimumFilterCutoffHz
+        {
+            get => minimumFilterCutoffHz;
+
+            set
+            {
+                if (!(0F <= value && value <= 96000F))
+                {
+                    throw new ArgumentOutOfRangeException("The minimum filter cutoff must be between 0 and 96000 Hz.");
+                }
+
+                minimumFilterCutoffHz = value;
+            }
+        }
+
+        /// <summary>
+        /// Gets or sets the highest GM program number the cutoff floor applies to.
+        /// Set to 127 to apply the floor to every melodic program.
+        /// </summary>
+        public int FilterCutoffFloorMaxProgram
+        {
+            get => filterCutoffFloorMaxProgram;
+
+            set
+            {
+                if (!(0 <= value && value <= 127))
+                {
+                    throw new ArgumentOutOfRangeException("The cutoff floor program limit must be between 0 and 127.");
+                }
+
+                filterCutoffFloorMaxProgram = value;
+            }
         }
     }
 }

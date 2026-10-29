@@ -49,7 +49,7 @@
                                FontSize="16"
                                FontWeight="Bold"
                                Foreground="{DynamicResource TextPrimaryBrush}"/>
-                    <TextBlock Text="Version 1.2.0 · 繁體中文專業版 (WinMusicXmlPlayer)"
+                    <TextBlock Text="Version 1.2.1 · 繁體中文專業版 (WinMusicXmlPlayer)"
                                FontSize="12"
                                Foreground="{DynamicResource AccentBlueBrush}"
                                Margin="0,3,0,0"/>

@@ -4,8 +4,6 @@ namespace MeltySynth
 {
     internal sealed class Voice
     {
-        private const float MinimumSustainedFilterCutoff = 100F;
-
         private readonly Synthesizer synthesizer;
 
         private readonly VolumeEnvelope volEnv;
@@ -43,6 +41,8 @@ namespace MeltySynth
 
         private float cutoff;
         private float resonance;
+        private float filterCutoffFloor;
+        private bool applyFilterCutoffFloor;
 
         private float vibLfoToPitch;
         private float modLfoToPitch;
@@ -103,7 +103,17 @@ namespace MeltySynth
                 noteGain = 0F;
             }
 
+            var channelInfo = synthesizer.Channels[channel];
+            filterCutoffFloor = synthesizer.MinimumFilterCutoffHz;
+            applyFilterCutoffFloor = filterCutoffFloor > 0F &&
+                channelInfo.BankNumber != 128 &&
+                channelInfo.PatchNumber <= synthesizer.FilterCutoffFloorMaxProgram;
+
             cutoff = region.InitialFilterCutoffFrequency;
+            if (applyFilterCutoffFloor)
+            {
+                cutoff = Math.Max(cutoff, filterCutoffFloor);
+            }
             resonance = SoundFontMath.DecibelsToLinear(region.InitialFilterQ);
 
             vibLfoToPitch = 0.01F * region.VibratoLfoToPitch;
@@ -111,10 +121,7 @@ namespace MeltySynth
             modEnvToPitch = 0.01F * region.ModulationEnvelopeToPitch;
 
             modLfoToCutoff = region.ModulationLfoToFilterCutoffFrequency;
-            modEnvToCutoff = ResolveModulationEnvelopeToFilterCutoff(
-                region.ModulationEnvelopeToFilterCutoffFrequency,
-                cutoff,
-                region.SustainModulationEnvelope);
+            modEnvToCutoff = region.ModulationEnvelopeToFilterCutoffFrequency;
             dynamicCutoff = modLfoToCutoff != 0 || modEnvToCutoff != 0;
 
             modLfoToVolume = region.ModulationLfoToVolume;
@@ -136,19 +143,6 @@ namespace MeltySynth
 
             voiceState = VoiceState.Playing;
             voiceLength = 0;
-        }
-
-        private static int ResolveModulationEnvelopeToFilterCutoff(int amount, float initialCutoff, float sustain)
-        {
-            if (amount >= 0)
-            {
-                return amount;
-            }
-
-            var clampedSustain = Math.Clamp(sustain, 0F, 1F);
-            var sustainedCutoff = initialCutoff * SoundFontMath.CentsToMultiplyingFactor(amount * clampedSustain);
-
-            return sustainedCutoff < MinimumSustainedFilterCutoff ? 0 : amount;
         }
 
         public void End()
@@ -198,6 +192,10 @@ namespace MeltySynth
                 var cents = modLfoToCutoff * modLfo.Value + modEnvToCutoff * modEnv.Value;
                 var factor = SoundFontMath.CentsToMultiplyingFactor(cents);
                 var newCutoff = factor * cutoff;
+                if (applyFilterCutoffFloor && newCutoff < filterCutoffFloor)
+                {
+                    newCutoff = filterCutoffFloor;
+                }
 
                 // The cutoff change is limited within x0.5 and x2 to reduce pop noise.
                 var lowerLimit = 0.5F * smoothedCutoff;

@@ -22,6 +22,8 @@ namespace MeltySynth
         private readonly int blockSize;
         private readonly int maximumPolyphony;
         private readonly bool enableReverbAndChorus;
+        private readonly float minimumFilterCutoffHz;
+        private readonly int filterCutoffFloorMaxProgram;
 
         private readonly int minimumVoiceDuration;
 
@@ -101,6 +103,8 @@ namespace MeltySynth
             this.blockSize = settings.BlockSize;
             this.maximumPolyphony = settings.MaximumPolyphony;
             this.enableReverbAndChorus = settings.EnableReverbAndChorus;
+            this.minimumFilterCutoffHz = settings.MinimumFilterCutoffHz;
+            this.filterCutoffFloorMaxProgram = settings.FilterCutoffFloorMaxProgram;
 
             minimumVoiceDuration = sampleRate / 500;
 
@@ -595,5 +599,7 @@ namespace MeltySynth
 
         internal int MinimumVoiceDuration => minimumVoiceDuration;
         internal Channel[] Channels => channels;
+        internal float MinimumFilterCutoffHz => minimumFilterCutoffHz;
+        internal int FilterCutoffFloorMaxProgram => filterCutoffFloorMaxProgram;
     }
 }

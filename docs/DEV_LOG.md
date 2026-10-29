@@ -5,33 +5,42 @@
 
 ---
 
-## 📅 2026-10-29 — v1.2.1 MuseScore 鋼琴無聲修正與 MeltySynth 原始碼內嵌
+## 📅 2026-10-29 — v1.2.1 MuseScore 鋼琴悶／無聲修正與 MeltySynth 原始碼內嵌
 
 ### 🎯 問題與根因
-使用者回報載入 `MuseScore_General.sf2` 與 `MS_Basic.sf2` 後鋼琴沒有聲音。解析 SF2 後確認兩者都包含 bank 0 / patch 0 的 `Grand Piano`，且取樣資料、鍵域與 loop 範圍皆正常。以 MeltySynth 2.4.1 實測發現問題只發生在中力度層：
+使用者回報載入 `MuseScore_General.sf2` 與 `MS_Basic.sf2` 後鋼琴沒有聲音，後續回報音色很悶、很小聲。解析 SF2 後確認兩者都包含 bank 0 / patch 0 的 `Grand Piano`，且取樣資料、鍵域與 loop 範圍皆正常。進一步比對生成器後確認：
 
 - `mf`／`f`（velocity 75–107）的 preset zone 設定了負向 modulation envelope → filter cutoff（`op11 = -2350`）。
-- 鋼琴 instrument 全域初始截止頻率為 `op8 = 6237`（約 300 Hz），mod-envelope sustain 為 100%（`op29 = 1000`）。
-- 兩者相乘後穩態截止頻率被壓到約 77 Hz，鋼琴聲音幾乎被濾除；velocity 108+ 的 FF 層設定 `op11 = +900`，因此仍可發聲。
+- 鋼琴 instrument 全域初始截止頻率為 `op8 = 6237`（約 **300 Hz**），mod-envelope sustain 為 100%（`op29 = 1000`）；其他音源多為 12–20 kHz。
+- 初版以 100 Hz 保護避免穩態 cutoff 掉到約 77 Hz，但實際仍停在 300 Hz，泛音幾乎被濾除，因此聽感仍悶。
 
 ### 🛠 修正
 1. 將 MeltySynth 2.4.1（commit `1ad7ba0`）原始碼內嵌至 `third_party/MeltySynth/`，移除原本的 `MeltySynth.dll` 參考。
-2. 於 `third_party/MeltySynth/src/Voice.cs` 加入持續濾波截止頻率保護：負向 mod-env → cutoff 若會使穩態 cutoff 低於 100 Hz，則忽略該調變。
-3. 新增 `--verify-soundfont [path]` 驗證模式，輸出 velocity 60–125 的峰值並檢查 mf/f 力度與單調性。
-4. 更新第三方授權聲明、架構文件與版本資訊。
+2. `SynthesizerSettings` 新增 `MinimumFilterCutoffHz` 與 `FilterCutoffFloorMaxProgram`，預設關閉以維持原行為。
+3. `Voice.cs` 在取得初始 cutoff 及每次 modulation 計算後套用下限；僅當 channel 非打擊通道且 patch 在指定範圍內時生效，並移除初版 100 Hz 特例。
+4. `AudioEngine` 以 `SoundFont.Info.BankName`（含 `MuseScore`）或檔名偵測 MuseScore 系列，對 GM 鋼琴 0–5 套用 **4 kHz** 下限；即時播放與離線 WAV 匯出共用同一設定。
+5. 新增 `--verify-soundfont [path]` 驗證模式，輸出 velocity 60–125 的峰值與 velocity 96 頻譜重心，並檢查力度與單調性。
+6. 更新第三方授權聲明、架構文件與版本資訊。
 
 ### ✅ 驗證
-- velocity 96 峰值：`MuseScore_General` 由 `-38.1` 提升至 `-16.5 dBFS`；`MS_Basic` 由 `-40.5` 提升至 `-18.3 dBFS`。
-- velocity 120 維持原本音量；TimGM6mb 與其他音源不受影響。
-- `dotnet build -c Release`：0 警告、0 錯誤；`--verify-all` 全數通過。
+- `MuseScore_General` velocity 96：頻譜重心 `569 Hz`、峰值 `-17.8 dBFS`。
+- `MS_Basic` velocity 96：頻譜重心 `566 Hz`、峰值 `-20.0 dBFS`。
+- 對照 `TimGM6mb`：`546 Hz`；`YDP-GrandPiano`：`712 Hz`；`GeneralUser-GS`：`473 Hz`。
+- `dotnet build -c Release`：0 警告、0 錯誤；`--verify-all` 與 `--verify-soundfont` 全數通過。
 
 ### 📂 異動檔案
+- [`third_party/MeltySynth/src/SynthesizerSettings.cs`](../third_party/MeltySynth/src/SynthesizerSettings.cs)
+- [`third_party/MeltySynth/src/Synthesizer.cs`](../third_party/MeltySynth/src/Synthesizer.cs)
 - [`third_party/MeltySynth/src/Voice.cs`](../third_party/MeltySynth/src/Voice.cs)
+- [`Services/AudioEngine.cs`](../Services/AudioEngine.cs)
 - [`App.xaml.cs`](../App.xaml.cs)
 - [`WinMusicXmlPlayer.csproj`](../WinMusicXmlPlayer.csproj)
 - [`docs/THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)
 - [`docs/ARCHITECTURE.md`](ARCHITECTURE.md)
+- [`docs/DEV_LOG.md`](DEV_LOG.md)
 - [`CHANGELOG.md`](../CHANGELOG.md)
+- [`README.md`](../README.md)
+- [`docs/USER_GUIDE.md`](USER_GUIDE.md)
 
 ---
 

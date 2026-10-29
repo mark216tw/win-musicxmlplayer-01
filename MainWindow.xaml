@@ -299,17 +299,8 @@
                                HorizontalAlignment="Center"/>
                 </StackPanel>
 
-                <!-- 右側：單一按鈕點擊切換鋼琴卷軸模式與 SF2 音源設定 -->
+                <!-- 右側：SF2 音源設定 -->
                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-                    <Button x:Name="BtnToggleViewMode"
-                            Style="{StaticResource ToolbarButtonStyle}"
-                            Padding="12,5"
-                            FontSize="12"
-                            Content="⇄ 水平時間軸卷軸"
-                            Click="BtnToggleViewMode_Click"
-                            Margin="0,0,8,0"
-                            ToolTip="點擊切換「水平時間軸卷軸」與「垂直下落瀑布流」模式"/>
-
                     <Button x:Name="BtnLoadSoundFont"
                             Style="{StaticResource ToolbarButtonStyle}"
                             Padding="10,5"
@@ -627,20 +618,24 @@
                             CornerRadius="{DynamicResource ButtonCornerRadius}"
                             Padding="6,3">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="卷軸視野："
-                                       Foreground="{DynamicResource TextMutedBrush}"
-                                       FontSize="11.5"
-                                       VerticalAlignment="Center"
-                                       Margin="2,0,6,0"/>
                             <Button Style="{StaticResource ToolbarButtonStyle}"
                                     Padding="7,1"
-                                    Content="－ 放大"
+                                    Content="－"
                                     Click="BtnZoomIn_Click"
+                                    ToolTip="放大卷軸視野"
                                     Margin="0,0,4,0"/>
                             <Button Style="{StaticResource ToolbarButtonStyle}"
                                     Padding="7,1"
-                                    Content="＋ 縮小"
-                                    Click="BtnZoomOut_Click"/>
+                                    Content="＋"
+                                    Click="BtnZoomOut_Click"
+                                    ToolTip="縮小卷軸視野"
+                                    Margin="0,0,4,0"/>
+                            <Button x:Name="BtnToggleViewMode"
+                                    Style="{StaticResource ToolbarButtonStyle}"
+                                    Padding="7,1"
+                                    Content="⇄"
+                                    Click="BtnToggleViewMode_Click"
+                                    ToolTip="切換水平時間軸卷軸與垂直下落瀑布流模式"/>
                         </StackPanel>
                     </Border>
                 </Grid>

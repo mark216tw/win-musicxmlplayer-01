@@ -792,9 +792,11 @@ namespace WinMusicXmlPlayer
         private void UpdateViewModeButtonVisual(PianoRollViewMode mode)
         {
             if (BtnToggleViewMode == null) return;
-            BtnToggleViewMode.Content = mode == PianoRollViewMode.HorizontalTimeline
-                ? "⇄ 水平時間軸卷軸"
-                : "⬇ 垂直下落瀑布流";
+            bool horizontal = mode == PianoRollViewMode.HorizontalTimeline;
+            BtnToggleViewMode.Content = horizontal ? "⇄" : "⬇";
+            BtnToggleViewMode.ToolTip = horizontal
+                ? "目前：水平時間軸卷軸，點擊切換為垂直下落瀑布流"
+                : "目前：垂直下落瀑布流，點擊切換為水平時間軸卷軸";
         }
 
         // ==================== 最近開啟的樂譜選單 ====================

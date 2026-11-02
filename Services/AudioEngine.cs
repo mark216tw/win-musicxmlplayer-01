@@ -31,6 +31,13 @@ namespace WinMusicXmlPlayer.Services
         private IWavePosition? _wavePosition;
         private long _totalBytesWritten;
 
+        // 音訊輸出裝置（WasapiOut / WaveOutEvent）在睡眠、裝置切換、拔插後會進入 Stopped；
+        // 以獨立的鎖管理播放器生命週期，避免與 Read() 的 _syncLock 互相等待造成死鎖。
+        private readonly object _deviceLock = new();
+        private bool _disposed;
+        private bool _audioRecoveryInProgress;
+        private int _suppressPlaybackStopped;
+
         private MusicScore? _score;
         private List<NoteEvent> _notes = new();
         private int _nextNoteIndex = 0;
@@ -271,6 +278,12 @@ namespace WinMusicXmlPlayer.Services
         }
 
         public event Action? PlaybackCompleted;
+
+        /// <summary>
+        /// 音訊輸出裝置非預期中斷（睡眠、切換裝置、拔插耳機等）時觸發，參數為錯誤訊息。
+        /// 此事件可能由背景執行緒觸發，UI 端需自行切回 Dispatcher。
+        /// </summary>
+        public event Action<string>? AudioOutputLost;
 
         public AudioEngine()
         {
@@ -584,13 +597,46 @@ namespace WinMusicXmlPlayer.Services
 
         private void EnsureWavePlayerInitialized()
         {
-            if (_waveOut != null) return;
+            lock (_deviceLock)
+            {
+                if (_disposed) return;
+
+                // 播放器存在但已 Stopped，代表底層裝置已失效（睡眠醒來、切換預設裝置、拔插耳機等），
+                // 必須丟棄重建；否則所有後續播放都會被舊的無效物件卡住。
+                if (_waveOut != null)
+                {
+                    if (_waveOut.PlaybackState != PlaybackState.Stopped)
+                        return;
+
+                    DisposeWavePlayerLocked();
+                }
+
+                CreateAndStartWavePlayerLocked();
+            }
+        }
+
+        private void CreateAndStartWavePlayerLocked()
+        {
+            _totalBytesWritten = 0;
+            _wavePosition = null;
+
             try
             {
                 const int wasapiLatencyMs = 35;
                 var wasapi = new WasapiOut(NAudio.CoreAudioApi.AudioClientShareMode.Shared, true, wasapiLatencyMs);
-                wasapi.Init(this);
-                wasapi.Play();
+                wasapi.PlaybackStopped += OnWavePlaybackStopped;
+                try
+                {
+                    wasapi.Init(this);
+                    wasapi.Play();
+                }
+                catch
+                {
+                    wasapi.PlaybackStopped -= OnWavePlaybackStopped;
+                    try { wasapi.Dispose(); } catch { }
+                    throw;
+                }
+
                 _waveOut = wasapi;
                 _wavePosition = wasapi;
                 // 共享模式實際延遲 ≈ 緩衝長度 + 音訊引擎週期 (~10ms)
@@ -601,8 +647,19 @@ namespace WinMusicXmlPlayer.Services
                 try
                 {
                     var waveOut = new WaveOutEvent { DesiredLatency = 55 };
-                    waveOut.Init(this);
-                    waveOut.Play();
+                    waveOut.PlaybackStopped += OnWavePlaybackStopped;
+                    try
+                    {
+                        waveOut.Init(this);
+                        waveOut.Play();
+                    }
+                    catch
+                    {
+                        waveOut.PlaybackStopped -= OnWavePlaybackStopped;
+                        try { waveOut.Dispose(); } catch { }
+                        throw;
+                    }
+
                     _waveOut = waveOut;
                     _wavePosition = waveOut;
                     _outputLatencySec = 0.055;
@@ -610,6 +667,106 @@ namespace WinMusicXmlPlayer.Services
                 catch
                 {
                     // 無音訊輸出裝置時仍維持時間推進
+                }
+            }
+        }
+
+        private void DisposeWavePlayerLocked()
+        {
+            var player = _waveOut;
+            _waveOut = null;
+            _wavePosition = null;
+            _totalBytesWritten = 0;
+            if (player == null) return;
+
+            Interlocked.Exchange(ref _suppressPlaybackStopped, 1);
+            try
+            {
+                player.PlaybackStopped -= OnWavePlaybackStopped;
+                try { player.Stop(); } catch { }
+                try { player.Dispose(); } catch { }
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _suppressPlaybackStopped, 0);
+            }
+        }
+
+        private void OnWavePlaybackStopped(object? sender, StoppedEventArgs e)
+        {
+            // 主動重建或程式關閉時忽略，避免誤報中斷
+            if (_disposed || Volatile.Read(ref _suppressPlaybackStopped) != 0)
+                return;
+
+            // 只處理目前使用中的播放器；舊播放器的延遲事件直接忽略
+            if (!ReferenceEquals(sender, Volatile.Read(ref _waveOut)))
+                return;
+
+            string message = e.Exception?.Message ?? "音訊輸出裝置已停止";
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                try { AudioOutputLost?.Invoke(message); }
+                catch { }
+            });
+        }
+
+        /// <summary>
+        /// 目前音訊輸出是否仍存活（播放器存在且未進入 Stopped）。
+        /// </summary>
+        public bool IsAudioOutputAlive
+        {
+            get
+            {
+                lock (_deviceLock)
+                {
+                    return _waveOut != null && _waveOut.PlaybackState != PlaybackState.Stopped;
+                }
+            }
+        }
+
+        /// <summary>
+        /// 重新建立音訊輸出裝置。用於睡眠喚醒、鎖定解除、預設裝置切換或播放中斷後恢復。
+        /// 會清除殘留發聲並從目前播放位置續播（若中斷前正在播放）。
+        /// </summary>
+        public void RecoverAudioOutput(bool force = false)
+        {
+            bool wasPlaying;
+            lock (_deviceLock)
+            {
+                if (_disposed || _audioRecoveryInProgress) return;
+                if (!force && _waveOut != null && _waveOut.PlaybackState != PlaybackState.Stopped) return;
+                _audioRecoveryInProgress = true;
+            }
+
+            try
+            {
+                lock (_syncLock)
+                {
+                    wasPlaying = _isPlaying;
+                    ResetVisualClock(_currentTimeSec);
+                }
+
+                lock (_deviceLock)
+                {
+                    DisposeWavePlayerLocked();
+                }
+
+                EnsureWavePlayerInitialized();
+
+                if (wasPlaying && _score != null)
+                {
+                    lock (_syncLock)
+                    {
+                        ResetVisualClock(_currentTimeSec);
+                        _isPlaying = true;
+                    }
+                }
+            }
+            finally
+            {
+                lock (_deviceLock)
+                {
+                    _audioRecoveryInProgress = false;
                 }
             }
         }
@@ -1430,14 +1587,10 @@ namespace WinMusicXmlPlayer.Services
 
         public void Dispose()
         {
-            try
+            _disposed = true;
+            lock (_deviceLock)
             {
-                _waveOut?.Stop();
-                _waveOut?.Dispose();
-            }
-            catch
-            {
-                // ignore
+                DisposeWavePlayerLocked();
             }
         }
     }

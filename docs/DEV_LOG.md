@@ -5,6 +5,28 @@
 
 ---
 
+## 📅 2026-11-03 — v1.2.2 音訊裝置中斷自動恢復
+
+### 🎯 問題與根因
+使用者回報播放一段時間後停止，重新開啟程式視窗或重選音源／樂譜都無法播放，必須關閉程式重啟。追查 `AudioEngine` 後確認：
+
+- `EnsureWavePlayerInitialized()` 僅檢查 `_waveOut != null` 就直接返回，未檢查 `PlaybackState`。
+- 專案未訂閱 NAudio `PlaybackStopped`；WASAPI 在睡眠／鎖定／切換預設裝置／拔插耳機後進入 `Stopped` 時無人處理。
+- 舊播放器物件仍非 null，後續 `Play()`、`LoadSoundFont()` 與重新載入樂譜都會跳過重建，形成永久卡死。
+
+### 🛠 修正
+1. `AudioEngine` 新增 `_deviceLock` 管理播放器生命週期，避免與 `Read()` 的 `_syncLock` 互鎖。
+2. `EnsureWavePlayerInitialized()` 偵測 `PlaybackState == Stopped` 時自動丟棄舊播放器並重建；`Dispose()` 增設 `_disposed` 旗標。
+3. 訂閱 `PlaybackStopped` 並新增 `AudioOutputLost` 事件，只處理目前使用中的播放器，忽略主動重建／關閉時的停止。
+4. 新增 `RecoverAudioOutput()`，保留合成器狀態與播放位置，重建輸出後無縫續播。
+5. `MainWindow` 訂閱中斷事件，並處理 `PowerModeChanged`（睡眠恢復）、`SessionSwitch`（解除鎖定）與視窗 `Activated`；`TogglePlayPause()` 遇到裝置失效時直接重新播放。
+
+### ✅ 驗證
+- `dotnet build -c Debug`／`Release`：0 警告、0 錯誤。
+- `--verify-all` 全數 PASS。
+
+---
+
 ## 📅 2026-11-02 — v1.2.2 移除垂直瀑布流卷軸模式
 
 ### 🎯 動機

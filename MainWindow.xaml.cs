@@ -32,6 +32,7 @@ namespace WinMusicXmlPlayer
         private double _masterVolumeBeforeMute = 1.0;
         private int _loopState;
         private DispatcherTimer? _toastTimer;
+        private DispatcherTimer? _audioRecoveryTimer;
 
         public bool AutoLoadLastScore { get; set; } = true;
 
@@ -62,6 +63,13 @@ namespace WinMusicXmlPlayer
                     BtnPlayPause.Content = "▶ 播放";
                 });
             };
+
+            // 音訊裝置可能在睡眠、鎖定、切換預設裝置或拔插耳機後失效，
+            // 需主動重建輸出，否則程式會一直卡在沒有聲音且無法播放的狀態。
+            _audioEngine.AudioOutputLost += OnAudioOutputLost;
+            SystemEvents.PowerModeChanged += OnSystemPowerModeChanged;
+            SystemEvents.SessionSwitch += OnSystemSessionSwitch;
+            Activated += MainWindow_Activated;
 
             Loaded += MainWindow_Loaded;
             Closed += MainWindow_Closed;
@@ -189,8 +197,76 @@ namespace WinMusicXmlPlayer
         private void MainWindow_Closed(object? sender, EventArgs e)
         {
             CompositionTarget.Rendering -= OnCompositionTargetRendering;
+            SystemEvents.PowerModeChanged -= OnSystemPowerModeChanged;
+            SystemEvents.SessionSwitch -= OnSystemSessionSwitch;
+            Activated -= MainWindow_Activated;
+            _audioEngine.AudioOutputLost -= OnAudioOutputLost;
+            _audioRecoveryTimer?.Stop();
             ThemeManager.FlushPreferences();
             _audioEngine.Dispose();
+        }
+
+        private void OnAudioOutputLost(string message)
+        {
+            Dispatcher.BeginInvoke(() =>
+            {
+                SyncPlayButtonContent();
+                ScheduleAudioRecovery(force: true, delayMs: 600,
+                    toastMessage: $"音訊裝置已中斷（{message}），正在重新連接...");
+            });
+        }
+
+        private void OnSystemPowerModeChanged(object sender, PowerModeChangedEventArgs e)
+        {
+            if (e.Mode == PowerModes.Resume)
+            {
+                Dispatcher.BeginInvoke(() => ScheduleAudioRecovery(force: true, delayMs: 1200,
+                    toastMessage: "系統已從睡眠恢復，正在重新連接音訊裝置..."));
+            }
+        }
+
+        private void OnSystemSessionSwitch(object sender, SessionSwitchEventArgs e)
+        {
+            if (e.Reason == SessionSwitchReason.SessionUnlock)
+            {
+                Dispatcher.BeginInvoke(() => ScheduleAudioRecovery(force: false, delayMs: 800,
+                    toastMessage: "已解除鎖定，正在檢查音訊裝置..."));
+            }
+        }
+
+        private void MainWindow_Activated(object? sender, EventArgs e)
+        {
+            // 從最小化或背景回到前景時，若裝置已失效就順手恢復
+            if (_audioEngine.IsPlaying && !_audioEngine.IsAudioOutputAlive)
+            {
+                ScheduleAudioRecovery(force: false, delayMs: 300,
+                    toastMessage: "音訊裝置已中斷，正在重新連接...");
+            }
+        }
+
+        private void ScheduleAudioRecovery(bool force, int delayMs, string? toastMessage)
+        {
+            if (toastMessage != null)
+                ShowToast(toastMessage);
+
+            _audioRecoveryTimer?.Stop();
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(delayMs) };
+            _audioRecoveryTimer = timer;
+            timer.Tick += (_, _) =>
+            {
+                timer.Stop();
+                if (ReferenceEquals(_audioRecoveryTimer, timer))
+                    _audioRecoveryTimer = null;
+
+                _audioEngine.RecoverAudioOutput(force);
+                SyncPlayButtonContent();
+            };
+            timer.Start();
+        }
+
+        private void SyncPlayButtonContent()
+        {
+            BtnPlayPause.Content = _audioEngine.IsPlaying ? "⏸ 暫停" : "▶ 播放";
         }
 
         public void LoadMusicXmlFile(string filePath, bool autoPlay = false, bool showErrorDialog = true)
@@ -1238,7 +1314,9 @@ namespace WinMusicXmlPlayer
                 return;
             }
 
-            if (_audioEngine.IsPlaying)
+            // 播放器若已 Stopped（裝置失效）仍會殘留 IsPlaying=true，
+            // 此時應直接重新播放（Play 會自動重建輸出），而不是誤判為暫停。
+            if (_audioEngine.IsPlaying && _audioEngine.IsAudioOutputAlive)
             {
                 _audioEngine.Pause();
                 BtnPlayPause.Content = "▶ 播放";

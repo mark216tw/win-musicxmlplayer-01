@@ -2,13 +2,20 @@
 
 本文件記錄 **Windows MusicXML 真實音源播放器 (WinMusicXmlPlayer)** 的版本演進與功能變更。
 
-## [v1.2.2] - 2026-11-02
+## [v1.2.2] - 2026-11-03
 
 ### 🗑 移除
 - **移除垂直瀑布流卷軸模式**：鋼琴卷軸統一為水平時間軸單一模式。
   - 移除 `RenderVerticalFalling` 繪製路徑、垂直命中測試與時間換算分支、垂直小節標籤快取與相關進出場動畫；水平模式的渲染、滑鼠操作與零配置快取架構維持不變。
   - 移除工具列「切換檢視模式（⇄/⬇）」按鈕、`PianoRollViewMode` 枚舉與「記憶上次卷軸檢視模式」偏好設定；舊偏好檔之殘留欄位載入時自動忽略。
   - `--capture-ui` 僅保留水平模式截圖；UI 自我測試移除模式切換項目；README／USER_GUIDE／ARCHITECTURE／SYSTEM_DESIGN／About 文件同步更新。
+
+### 🐞 修正
+- **修正播放一段時間或系統睡眠後無法再播放的問題**：音訊裝置中斷後不再需要關閉程式重啟。
+  - **根因**：`EnsureWavePlayerInitialized()` 只檢查播放器物件是否存在，未檢查 `PlaybackState`；且未訂閱 NAudio `PlaybackStopped`。WASAPI 在睡眠喚醒、螢幕鎖定、切換預設音訊裝置或拔插耳機後進入 `Stopped` 時，舊播放器仍非 null，後續播放、重選音源與重新載入樂譜都會跳過重建，形成永久卡死。
+  - **修正**：新增音訊裝置生命週期管理與 `PlaybackStopped` 監聽，偵測到失效時自動丟棄舊播放器並重建；新增 `RecoverAudioOutput()` 保留合成器狀態與播放位置無縫續播。
+  - **應用程式整合**：`MainWindow` 會處理音訊中斷事件，並在系統睡眠恢復、解除鎖定與視窗重回前景時自動檢查／恢復輸出；播放按鈕在裝置失效時可直接重新播放。
+  - **驗證**：`dotnet build -c Debug`／`Release` 均為 0 警告、0 錯誤；`--verify-all` 全數 PASS。
 
 ## [v1.2.1] - 2026-10-29
 

@@ -5,6 +5,24 @@
 
 ---
 
+## 📅 2026-11-03 — v1.2.3 新增 Windows ARM64 發行版
+
+### 🎯 動機
+讓 Windows on ARM 裝置（Snapdragon X 系列等）可原生執行，不必依賴 x64 模擬。
+
+### 🛠 實作
+1. 檢查相依性：`NAudio.Core.dll`、`NAudio.Wasapi.dll`、`NAudio.WinMM.dll` 皆為 AnyCPU（ILONLY、未設定 32BITREQUIRED）；MeltySynth 為內嵌 managed 原始碼，無 x64 專屬原生依賴。
+2. 以 `dotnet publish -c Release -r win-arm64 --self-contained false` 交叉編譯 framework-dependent ARM64 版本，apphost 為 ARM64（PE Machine `0xAA64`）。
+3. x64 與 ARM64 皆保留相同內容：`Assets/SoundFonts/TimGM6mb.sf2`、文件、CHANGELOG、LICENSE 與 README；不包含 `staffs/` 與 `soundfonts/`。
+4. 文件同步更新 README、USER_GUIDE、About 版本與下載檔名。
+
+### ✅ 驗證
+- `dotnet build -c Release`：0 警告、0 錯誤。
+- x64 `--verify-all` 全數 PASS。
+- ARM64 進行 PE 架構與相依組件靜態檢查；本機為 x64，實際執行由使用者在 ARM64 裝置驗證。
+
+---
+
 ## 📅 2026-11-03 — v1.2.2 音訊裝置中斷自動恢復
 
 ### 🎯 問題與根因

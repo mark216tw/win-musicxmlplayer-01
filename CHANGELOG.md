@@ -2,6 +2,14 @@
 
 本文件記錄 **Windows MusicXML 真實音源播放器 (WinMusicXmlPlayer)** 的版本演進與功能變更。
 
+## [v1.2.3] - 2026-11-03
+
+### 🚀 新增
+- **新增 Windows ARM64 發行版**：提供 `WinMusicXmlPlayer-v1.2.3-win-arm64.zip`，功能與 x64 版本相同。
+  - 採 framework-dependent 發行，ARM64 使用者需安裝 .NET 8.0 Desktop Runtime (ARM64)。
+  - NAudio 相依組件為 AnyCPU、MeltySynth 為內嵌 managed 原始碼，無 x64 專屬原生依賴。
+  - 本版僅新增平台建置與文件說明，未變更程式行為；x64 版本同步以 v1.2.3 重新建置。
+
 ## [v1.2.2] - 2026-11-03
 
 ### 🗑 移除

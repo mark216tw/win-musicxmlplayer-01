@@ -630,12 +630,6 @@
                                     Click="BtnZoomOut_Click"
                                     ToolTip="縮小卷軸視野"
                                     Margin="0,0,4,0"/>
-                            <Button x:Name="BtnToggleViewMode"
-                                    Style="{StaticResource ToolbarButtonStyle}"
-                                    Padding="7,1"
-                                    Content="⇄"
-                                    Click="BtnToggleViewMode_Click"
-                                    ToolTip="切換水平時間軸卷軸與垂直下落瀑布流模式"/>
                         </StackPanel>
                     </Border>
                 </Grid>

@@ -1,6 +1,6 @@
 # 系統設計文件 (System Design Document)
 
-本文件詳述 **Windows MusicXML 真實音源播放器 (WinMusicXmlPlayer)** 的核心資料結構、樂理與時間軸轉換演算法、88 鍵與雙模式卷軸幾何座標映射公式，以及主題色彩空間設計。
+本文件詳述 **Windows MusicXML 真實音源播放器 (WinMusicXmlPlayer)** 的核心資料結構、樂理與時間軸轉換演算法、88 鍵鋼琴幾何座標映射公式，以及主題色彩空間設計。
 
 ---
 
@@ -56,7 +56,7 @@
 
 ---
 
-## 3. 88 鍵鋼琴與雙模式卷軸幾何設計
+## 3. 88 鍵鋼琴幾何設計
 
 ### 3.1 88 鍵水平座標映射 (`PianoKeyboardControl.GetKeyHorizontalSpan`)
 標準 88 鍵鋼琴涵蓋 MIDI Pitch `21` (`A0`) 至 `108` (`C8`)，共包含 **52 個白鍵** 與 **36 個黑鍵**：
@@ -66,7 +66,6 @@
 - **黑鍵寬度與非對稱偏移**：
   - 黑鍵寬度 $W_{\text{black}} = 0.62 \times W_{\text{white}}$。
   - 為重現真實平台鋼琴黑鍵群組（2 黑鍵組與 3 黑鍵組）的物理視覺比例，依音高類別 $pc = \text{pitch} \bmod 12$ 套用微調偏移率（`C#: 0.64`、`D#: 0.72`、`F#: 0.62`、`G#: 0.68`、`A#: 0.74`）。
-- **垂直瀑布流對齊**：`PianoRollControl` 在 `VerticalFalling` 模式下直接呼叫 `PianoKeyboardControl.GetKeyHorizontalSpan(pitch, width)`，確保瀑布流落下的每一顆音符與下方 88 鍵琴鍵達到 100% 像素級對齊。
 
 ### 3.2 同音連續敲擊回彈間隙設計 (Re-articulation Gap)
 當樂曲出現同音反覆連打（例如前音結束時間等於後音開始時間 $t_{\text{end}, i} = t_{\text{start}, i+1}$）時，若直接以 $[t_{\text{start}}, t_{\text{end}}]$ 判斷琴鍵按壓，視覺上琴鍵會呈現持續按死狀態。  

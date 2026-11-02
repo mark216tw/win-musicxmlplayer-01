@@ -23,7 +23,7 @@
 flowchart TD
     subgraph UI["展示與互動層 (Presentation & Custom Controls)"]
         MW["MainWindow (主視窗 / 系統選單 / 混音面板)"]
-        PR["PianoRollControl (雙模式鋼琴卷軸 - OnRender 向量繪圖)"]
+        PR["PianoRollControl (水平時間軸鋼琴卷軸 - OnRender 向量繪圖)"]
         PK["PianoKeyboardControl (88 鍵動態鋼琴 - OnRender 向量繪圖)"]
         SW["SoundFontWindow (雙槽音源分流設定與下載建議視窗)"]
         PW["PreferencesWindow (偏好設定視窗)"]

@@ -9,17 +9,10 @@ using WinMusicXmlPlayer.Services;
 
 namespace WinMusicXmlPlayer.Controls
 {
-    public enum PianoRollViewMode
-    {
-        HorizontalTimeline = 0,
-        VerticalFalling = 1
-    }
-
     public class PianoRollControl : FrameworkElement
     {
         private MusicScore? _score;
         private double _currentTimeSec;
-        private PianoRollViewMode _viewMode = PianoRollViewMode.HorizontalTimeline;
         // 預設視野縮小 4 級：8.0 * (1.25^4) = 19.53 秒
         private double _visibleWindowSeconds = 19.53;
 
@@ -95,7 +88,6 @@ namespace WinMusicXmlPlayer.Controls
 
         // 小節標籤與裁剪幾何快取，避免每幀重新配置 FormattedText / RectangleGeometry
         private FormattedText?[] _cachedHorizontalMeasureLabels = Array.Empty<FormattedText?>();
-        private FormattedText?[] _cachedVerticalMeasureLabels = Array.Empty<FormattedText?>();
         private RectangleGeometry? _cachedClipGeometry;
         private double _cachedClipWidth = -1.0;
         private double _cachedClipHeight = -1.0;
@@ -189,7 +181,6 @@ namespace WinMusicXmlPlayer.Controls
         private void InvalidateMeasureLabelCache()
         {
             _cachedHorizontalMeasureLabels = Array.Empty<FormattedText?>();
-            _cachedVerticalMeasureLabels = Array.Empty<FormattedText?>();
             _cachedClipGeometry = null;
             _cachedClipWidth = -1.0;
             _cachedClipHeight = -1.0;
@@ -198,54 +189,28 @@ namespace WinMusicXmlPlayer.Controls
             _cachedLoopLabelDpi = -1.0;
         }
 
-        private FormattedText GetCachedMeasureLabel(int index, MeasureMarker measure, bool vertical, Brush brush, double dpi)
+        private FormattedText GetCachedMeasureLabel(int index, MeasureMarker measure, Brush brush, double dpi)
         {
-            if (vertical)
-            {
-                if (_cachedVerticalMeasureLabels.Length < _score!.Measures.Count)
-                    _cachedVerticalMeasureLabels = new FormattedText?[_score.Measures.Count];
+            if (_cachedHorizontalMeasureLabels.Length < _score!.Measures.Count)
+                _cachedHorizontalMeasureLabels = new FormattedText?[_score.Measures.Count];
 
-                var existing = _cachedVerticalMeasureLabels[index];
-                if (existing != null)
-                    return existing;
+            var existing = _cachedHorizontalMeasureLabels[index];
+            if (existing != null)
+                return existing;
 
-                string label = string.IsNullOrEmpty(measure.SectionText)
-                    ? $"小節 {measure.MeasureNumberText}"
-                    : $"小節 {measure.MeasureNumberText} · {measure.SectionText}";
-                var created = new FormattedText(
-                    label,
-                    CultureInfo.InvariantCulture,
-                    FlowDirection.LeftToRight,
-                    UiTypeface,
-                    11.0,
-                    brush,
-                    dpi);
-                _cachedVerticalMeasureLabels[index] = created;
-                return created;
-            }
-            else
-            {
-                if (_cachedHorizontalMeasureLabels.Length < _score!.Measures.Count)
-                    _cachedHorizontalMeasureLabels = new FormattedText?[_score.Measures.Count];
-
-                var existing = _cachedHorizontalMeasureLabels[index];
-                if (existing != null)
-                    return existing;
-
-                string label = string.IsNullOrEmpty(measure.SectionText)
-                    ? $"M.{measure.MeasureNumberText}"
-                    : $"M.{measure.MeasureNumberText} · {measure.SectionText}";
-                var created = new FormattedText(
-                    label,
-                    CultureInfo.InvariantCulture,
-                    FlowDirection.LeftToRight,
-                    UiTypeface,
-                    11.0,
-                    brush,
-                    dpi);
-                _cachedHorizontalMeasureLabels[index] = created;
-                return created;
-            }
+            string label = string.IsNullOrEmpty(measure.SectionText)
+                ? $"M.{measure.MeasureNumberText}"
+                : $"M.{measure.MeasureNumberText} · {measure.SectionText}";
+            var created = new FormattedText(
+                label,
+                CultureInfo.InvariantCulture,
+                FlowDirection.LeftToRight,
+                UiTypeface,
+                11.0,
+                brush,
+                dpi);
+            _cachedHorizontalMeasureLabels[index] = created;
+            return created;
         }
 
         private FormattedText GetCachedLoopLabel(char label, double dpi)
@@ -332,19 +297,6 @@ namespace WinMusicXmlPlayer.Controls
             };
         }
 
-        public PianoRollViewMode ViewMode
-        {
-            get => _viewMode;
-            set
-            {
-                if (_viewMode != value)
-                {
-                    _viewMode = value;
-                    InvalidateVisual();
-                }
-            }
-        }
-
         public double VisibleWindowSeconds
         {
             get => _visibleWindowSeconds;
@@ -398,7 +350,7 @@ namespace WinMusicXmlPlayer.Controls
             _isDraggingTime = false;
             _dragStartPoint = e.GetPosition(this);
             _dragStartTimeSec = _currentTimeSec;
-            _dragFromTopRuler = _dragStartPoint.Y <= 30.0 && _viewMode == PianoRollViewMode.HorizontalTimeline;
+            _dragFromTopRuler = _dragStartPoint.Y <= 30.0;
             _clickTogglesPlayPause = IsInToggleArea(_dragStartPoint);
             _suppressClickToggle = e.ClickCount > 1;
 
@@ -474,9 +426,6 @@ namespace WinMusicXmlPlayer.Controls
 
         private bool IsInToggleArea(Point pt)
         {
-            if (_viewMode == PianoRollViewMode.VerticalFalling)
-                return true;
-
             const double rulerH = 30.0;
             const double pitchBarW = 44.0;
             return pt.X >= pitchBarW && pt.Y > rulerH;
@@ -486,24 +435,13 @@ namespace WinMusicXmlPlayer.Controls
         {
             if (_score == null) return 0.0;
             double w = Math.Max(100, ActualWidth);
-            double h = Math.Max(100, ActualHeight);
 
-            if (_viewMode == PianoRollViewMode.HorizontalTimeline)
-            {
-                double leftPitchLabelW = 44.0;
-                double canvasW = Math.Max(50, w - leftPitchLabelW);
-                double playheadX = leftPitchLabelW + canvasW * 0.24;
-                double pxPerSec = canvasW / _visibleWindowSeconds;
-                double t = _currentTimeSec + (pt.X - playheadX) / pxPerSec;
-                return Math.Clamp(t, 0.0, _score.TotalDurationSeconds);
-            }
-            else
-            {
-                double lookaheadSec = _visibleWindowSeconds * 0.65;
-                double pxPerSec = h / lookaheadSec;
-                double t = _currentTimeSec + (h - pt.Y) / pxPerSec;
-                return Math.Clamp(t, 0.0, _score.TotalDurationSeconds);
-            }
+            double leftPitchLabelW = 44.0;
+            double canvasW = Math.Max(50, w - leftPitchLabelW);
+            double playheadX = leftPitchLabelW + canvasW * 0.24;
+            double pxPerSec = canvasW / _visibleWindowSeconds;
+            double t = _currentTimeSec + (pt.X - playheadX) / pxPerSec;
+            return Math.Clamp(t, 0.0, _score.TotalDurationSeconds);
         }
 
         private NoteEvent? HitTestNoteAtPoint(Point pt)
@@ -514,64 +452,40 @@ namespace WinMusicXmlPlayer.Controls
             if (w <= 10 || h <= 10) return null;
 
             var notes = _score.Notes;
-            if (_viewMode == PianoRollViewMode.HorizontalTimeline)
+            double rulerH = 28.0;
+            double leftPitchLabelW = 44.0;
+            if (pt.X < leftPitchLabelW || pt.Y < rulerH) return null;
+
+            double rollH = Math.Max(40, h - rulerH);
+            double canvasW = Math.Max(50, w - leftPitchLabelW);
+            int minPitch = Math.Max(21, _score.MinMidiPitch);
+            int maxPitch = Math.Min(108, _score.MaxMidiPitch);
+            if (maxPitch - minPitch < 24)
             {
-                double rulerH = 28.0;
-                double leftPitchLabelW = 44.0;
-                if (pt.X < leftPitchLabelW || pt.Y < rulerH) return null;
-
-                double rollH = Math.Max(40, h - rulerH);
-                double canvasW = Math.Max(50, w - leftPitchLabelW);
-                int minPitch = Math.Max(21, _score.MinMidiPitch);
-                int maxPitch = Math.Min(108, _score.MaxMidiPitch);
-                if (maxPitch - minPitch < 24)
-                {
-                    int mid = (minPitch + maxPitch) / 2;
-                    minPitch = Math.Max(21, mid - 12);
-                    maxPitch = Math.Min(108, mid + 12);
-                }
-                int pitchSpan = maxPitch - minPitch + 1;
-                double rowH = rollH / pitchSpan;
-                int hoverPitch = maxPitch - (int)((pt.Y - rulerH) / rowH);
-                if (hoverPitch < minPitch || hoverPitch > maxPitch) return null;
-
-                double playheadX = leftPitchLabelW + canvasW * 0.24;
-                double pxPerSec = canvasW / _visibleWindowSeconds;
-                double hoverTimeSec = _currentTimeSec + (pt.X - playheadX) / pxPerSec;
-
-                int startIdx = _score.FindFirstNoteIndexForWindow(hoverTimeSec - 0.05);
-                for (int i = startIdx; i < notes.Count; i++)
-                {
-                    var n = notes[i];
-                    if (n.StartTimeSeconds > hoverTimeSec + 0.02) break;
-                    if (n.MidiPitch == hoverPitch &&
-                        hoverTimeSec >= n.StartTimeSeconds &&
-                        hoverTimeSec <= n.EndTimeSeconds &&
-                        _score.Tracks[n.TrackIndex].IsVisibleOnRoll)
-                    {
-                        return n;
-                    }
-                }
+                int mid = (minPitch + maxPitch) / 2;
+                minPitch = Math.Max(21, mid - 12);
+                maxPitch = Math.Min(108, mid + 12);
             }
-            else
-            {
-                double lookaheadSec = _visibleWindowSeconds * 0.65;
-                double pxPerSec = h / lookaheadSec;
-                double hoverTimeSec = _currentTimeSec + (h - pt.Y) / pxPerSec;
+            int pitchSpan = maxPitch - minPitch + 1;
+            double rowH = rollH / pitchSpan;
+            int hoverPitch = maxPitch - (int)((pt.Y - rulerH) / rowH);
+            if (hoverPitch < minPitch || hoverPitch > maxPitch) return null;
 
-                int startIdx = _score.FindFirstNoteIndexForWindow(hoverTimeSec - 0.05);
-                for (int i = startIdx; i < notes.Count; i++)
+            double playheadX = leftPitchLabelW + canvasW * 0.24;
+            double pxPerSec = canvasW / _visibleWindowSeconds;
+            double hoverTimeSec = _currentTimeSec + (pt.X - playheadX) / pxPerSec;
+
+            int startIdx = _score.FindFirstNoteIndexForWindow(hoverTimeSec - 0.05);
+            for (int i = startIdx; i < notes.Count; i++)
+            {
+                var n = notes[i];
+                if (n.StartTimeSeconds > hoverTimeSec + 0.02) break;
+                if (n.MidiPitch == hoverPitch &&
+                    hoverTimeSec >= n.StartTimeSeconds &&
+                    hoverTimeSec <= n.EndTimeSeconds &&
+                    _score.Tracks[n.TrackIndex].IsVisibleOnRoll)
                 {
-                    var n = notes[i];
-                    if (n.StartTimeSeconds > hoverTimeSec + 0.02) break;
-                    if (hoverTimeSec >= n.StartTimeSeconds &&
-                        hoverTimeSec <= n.EndTimeSeconds &&
-                        _score.Tracks[n.TrackIndex].IsVisibleOnRoll)
-                    {
-                        var (kx, kw) = PianoKeyboardControl.GetKeyHorizontalSpan(n.MidiPitch, w);
-                        if (pt.X >= kx && pt.X <= kx + kw)
-                            return n;
-                    }
+                    return n;
                 }
             }
             return null;
@@ -585,7 +499,7 @@ namespace WinMusicXmlPlayer.Controls
 
             double secondsPerPixel = _visibleWindowSeconds / w;
             double deltaTime;
-            if (_viewMode == PianoRollViewMode.HorizontalTimeline && !_dragFromTopRuler)
+            if (!_dragFromTopRuler)
             {
                 deltaTime = -dx * secondsPerPixel * 1.15;
             }
@@ -674,14 +588,7 @@ namespace WinMusicXmlPlayer.Controls
                 return;
             }
 
-            if (_viewMode == PianoRollViewMode.HorizontalTimeline)
-            {
-                RenderHorizontalTimeline(dc, w, h, dpi, isDark);
-            }
-            else
-            {
-                RenderVerticalFalling(dc, w, h, dpi, isDark);
-            }
+            RenderHorizontalTimeline(dc, w, h, dpi, isDark);
 
             if (_isDraggingTime)
             {
@@ -808,7 +715,7 @@ namespace WinMusicXmlPlayer.Controls
 
                 if (mx >= lastLabelRightX + 8)
                 {
-                    var ft = GetCachedMeasureLabel(m, meas, vertical: false, rulerLabelBrush, dpi);
+                    var ft = GetCachedMeasureLabel(m, meas, rulerLabelBrush, dpi);
 
                     double textRight = mx + 4 + ft.Width;
                     lastLabelRightX = textRight;
@@ -900,92 +807,6 @@ namespace WinMusicXmlPlayer.Controls
             DrawBottomLeftHintBadge(dc, canvasLeft + 10, h - 32, isDark);
         }
 
-        private void RenderVerticalFalling(DrawingContext dc, double w, double h, double dpi, bool isDark)
-        {
-            if (_score == null) return;
-
-            double lookaheadSec = _visibleWindowSeconds * 0.65;
-            double pxPerSec = h / lookaheadSec;
-            double viewStartSec = _currentTimeSec;
-            double viewEndSec = _currentTimeSec + lookaheadSec;
-
-            Brush blackLaneBrush = _blackLaneBrush;
-            Brush measureTextBrush = isDark ? DarkRulerLabelBrush : LightRulerLabelBrush;
-
-            // 1. 繪製對齊下方 88 鍵的垂直音軌格線
-            for (int m = PianoKeyboardControl.FirstMidiNote; m <= PianoKeyboardControl.LastMidiNote; m++)
-            {
-                var (kx, kw) = PianoKeyboardControl.GetKeyHorizontalSpan(m, w);
-                if (PianoKeyboardControl.IsBlackKey(m))
-                {
-                    dc.DrawRectangle(blackLaneBrush, null, new Rect(kx, 0, kw, h));
-                }
-                if (m % 12 == 0)
-                {
-                    dc.DrawLine(OctaveGridPen, new Point(kx, 0), new Point(kx, h));
-                }
-            }
-
-            // 2. 繪製水平下落的小節線
-            var measures = _score.Measures;
-            for (int m = 0; m < measures.Count; m++)
-            {
-                var meas = measures[m];
-                if (meas.StartTimeSeconds < viewStartSec) continue;
-                if (meas.StartTimeSeconds > viewEndSec) break;
-
-                double my = h - (meas.StartTimeSeconds - _currentTimeSec) * pxPerSec;
-                dc.DrawLine(MeasureLinePen, new Point(0, my), new Point(w, my));
-
-                var ft = GetCachedMeasureLabel(m, meas, vertical: true, measureTextBrush, dpi);
-                dc.DrawText(ft, new Point(10, Math.Max(4, my - ft.Height - 2)));
-            }
-
-            // 3. 繪製垂直下落的音符磚塊
-            bool anySolo = false;
-            for (int t = 0; t < _score.Tracks.Count; t++)
-            {
-                if (_score.Tracks[t].IsSolo) { anySolo = true; break; }
-            }
-
-            var notes = _score.Notes;
-            int startIdx = _score.FindFirstNoteIndexForWindow(viewStartSec);
-            for (int i = startIdx; i < notes.Count; i++)
-            {
-                var n = notes[i];
-                if (n.StartTimeSeconds > viewEndSec) break;
-                if (n.EndTimeSeconds < viewStartSec) continue;
-                if (n.MidiPitch < PianoKeyboardControl.FirstMidiNote || n.MidiPitch > PianoKeyboardControl.LastMidiNote)
-                    continue;
-
-                var track = _score.Tracks[n.TrackIndex];
-                if (!track.IsVisibleOnRoll) continue;
-
-                bool isAudible = !track.IsMuted && (!anySolo || track.IsSolo);
-                double releaseGap = Math.Clamp(n.DurationSeconds * 0.18, 0.028, 0.055);
-                double activeEndSec = n.StartTimeSeconds + Math.Max(0.025, n.DurationSeconds - releaseGap);
-                bool isActiveNow = n.StartTimeSeconds <= _currentTimeSec && _currentTimeSec <= activeEndSec && isAudible;
-
-                var (kx, kw) = PianoKeyboardControl.GetKeyHorizontalSpan(n.MidiPitch, w);
-                double yBottom = h - Math.Max(0, (n.StartTimeSeconds - _currentTimeSec) * pxPerSec);
-                double yTop = h - (n.EndTimeSeconds - _currentTimeSec) * pxPerSec;
-
-                double spanPx = yBottom - yTop;
-                double gapPx = Math.Clamp(spanPx * 0.12, 2.0, 4.0);
-                double nh = Math.Max(3.5, spanPx - gapPx);
-                Rect noteRect = new(kx + 1.0, yTop + gapPx, Math.Max(3.0, kw - 2.0), nh);
-
-                Brush fillBrush = isAudible ? track.ThemeBrush : track.MutedThemeBrush;
-
-                dc.DrawRoundedRectangle(fillBrush, isActiveNow ? ActiveNoteBorderPen : null, noteRect, 3.0, 3.0);
-            }
-
-            // 底部觸鍵光暈線 (與主題色彩連動)
-            dc.DrawLine(_playheadPen, new Point(0, h - 1), new Point(w, h - 1));
-
-            DrawBottomLeftHintBadge(dc, 12, h - 32, isDark);
-        }
-
         private void DrawBottomLeftHintBadge(DrawingContext dc, double x, double y, bool isDark)
         {
             var hintFt = _cachedHintFt;
@@ -1062,7 +883,7 @@ namespace WinMusicXmlPlayer.Controls
             double bw = ft.Width + 24;
             double bh = ft.Height + 10;
             double bx = Math.Max(52, w - bw - 14);
-            double by = _viewMode == PianoRollViewMode.HorizontalTimeline ? 34 : 10;
+            double by = 34;
 
             dc.DrawRoundedRectangle(
                 isDark ? DarkHintBgBrush : LightHintBgBrush,

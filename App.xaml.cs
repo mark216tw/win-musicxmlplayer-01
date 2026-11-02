@@ -29,20 +29,15 @@ namespace WinMusicXmlPlayer
                 var files = Directory.GetFiles(Directory.GetCurrentDirectory(), "*.musicxml").OrderBy(f => f).ToList();
                 string outDir = @"C:\Users\STATUS\.gemini\antigravity\brain\9841aea9-af6e-4051-b038-e01f27520133";
                 string? springFile = files.FirstOrDefault(f => f.Contains("allegro.musicxml"));
-                string? trioFile = files.FirstOrDefault(f => f.Contains("k-496"));
                 string? moonlightFile = files.FirstOrDefault(f => f.Contains("moonlight"));
 
                 if (springFile != null)
                 {
-                    win.CaptureScreenshotAt(springFile, 8.2, Controls.PianoRollViewMode.HorizontalTimeline, Path.Combine(outDir, "ui_horizontal_spring.png"));
-                }
-                if (trioFile != null)
-                {
-                    win.CaptureScreenshotAt(trioFile, 14.5, Controls.PianoRollViewMode.VerticalFalling, Path.Combine(outDir, "ui_vertical_trio.png"));
+                    win.CaptureScreenshotAt(springFile, 8.2, Path.Combine(outDir, "ui_horizontal_spring.png"));
                 }
                 if (moonlightFile != null)
                 {
-                    win.CaptureScreenshotAt(moonlightFile, 32.0, Controls.PianoRollViewMode.HorizontalTimeline, Path.Combine(outDir, "ui_moonlight_voices.png"));
+                    win.CaptureScreenshotAt(moonlightFile, 32.0, Path.Combine(outDir, "ui_moonlight_voices.png"));
                 }
                 win.Close();
                 Shutdown(0);
@@ -147,12 +142,12 @@ namespace WinMusicXmlPlayer
                 }
                 sb.AppendLine("[PASS] Performance expression self-test (arpeggio/breath/humanize/vibrato/velocity) passed!");
 
-                // 測試 UI 選單展開、模式單一按鈕切換、重置按鈕隱藏/顯示與 Toast 訊息
+                // 測試 UI 選單展開、重置按鈕隱藏/顯示與 Toast 訊息
                 var testWin = new MainWindow { AutoLoadLastScore = false };
                 testWin.Show();
                 testWin.RunUiSelfTest(musicFiles[0]);
                 testWin.Close();
-                sb.AppendLine("[PASS] UI Self-Test (Menu Popup, ViewMode Toggle, Reset Button Visibility & Toast) passed!");
+                sb.AppendLine("[PASS] UI Self-Test (Menu Popup, Reset Button Visibility & Toast) passed!");
 
                 var preferencesWindow = new PreferencesWindow();
                 preferencesWindow.Show();

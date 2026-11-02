@@ -52,7 +52,6 @@ namespace WinMusicXmlPlayer.Services
         public int ChorusAmount { get; set; } = 15;
         public double MasterVolume { get; set; } = 1.0;
         public List<string> RecentFiles { get; set; } = new();
-        public int LastViewMode { get; set; } = 0;
         public double LastVisibleWindowSeconds { get; set; } = 19.53;
         public int VisualSyncOffsetMs { get; set; } = 0;
         public int HumanizeAmount { get; set; } = 30;
@@ -92,7 +91,6 @@ namespace WinMusicXmlPlayer.Services
         private static int _chorusAmount = 15;
         private static double _masterVolume = 1.0;
         private static readonly List<string> _recentFiles = new();
-        private static int _lastViewMode = 0;
         private static double _lastVisibleWindowSeconds = 19.53;
         private static int _visualSyncOffsetMs = 0;
         private static int _humanizeAmount = 30;
@@ -119,7 +117,6 @@ namespace WinMusicXmlPlayer.Services
         public static int ChorusAmount => _chorusAmount;
         public static double MasterVolume => _masterVolume;
         public static IReadOnlyList<string> RecentFiles => _recentFiles;
-        public static int LastViewMode => _lastViewMode;
         public static double LastVisibleWindowSeconds => _lastVisibleWindowSeconds;
         public static int VisualSyncOffsetMs => _visualSyncOffsetMs;
         public static int HumanizeAmount => _humanizeAmount;
@@ -377,15 +374,6 @@ namespace WinMusicXmlPlayer.Services
             _recentFiles.Clear();
             _lastOpenedScorePath = string.Empty;
             SavePreferences();
-        }
-
-        public static void SetLastViewMode(int viewMode)
-        {
-            if (_lastViewMode != viewMode)
-            {
-                _lastViewMode = viewMode;
-                SavePreferences();
-            }
         }
 
         public static void SetLastVisibleWindowSeconds(double seconds)
@@ -882,7 +870,6 @@ namespace WinMusicXmlPlayer.Services
                             }
                         }
                     }
-                    _lastViewMode = data.LastViewMode is 0 or 1 ? data.LastViewMode : 0;
                     if (data.LastVisibleWindowSeconds >= 3.0 && data.LastVisibleWindowSeconds <= 40.0)
                     {
                         _lastVisibleWindowSeconds = data.LastVisibleWindowSeconds;
@@ -925,7 +912,6 @@ namespace WinMusicXmlPlayer.Services
                 ChorusAmount = _chorusAmount,
                 MasterVolume = _masterVolume,
                 RecentFiles = new List<string>(_recentFiles),
-                LastViewMode = _lastViewMode,
                 LastVisibleWindowSeconds = _lastVisibleWindowSeconds,
                 VisualSyncOffsetMs = _visualSyncOffsetMs,
                 HumanizeAmount = _humanizeAmount,

@@ -5,6 +5,25 @@
 
 ---
 
+## 📅 2026-11-02 — v1.2.2 移除垂直瀑布流卷軸模式
+
+### 🎯 動機
+垂直瀑布流（`VerticalFalling`）模式的維護成本高（獨立的繪製路徑、命中測試、時間換算、小節標籤快取與進出場動畫），且使用情境有限。經評估後決定移除該模式，鋼琴卷軸統一為水平時間軸單一模式，簡化工具列與程式架構。
+
+### 🗑 移除內容
+1. `PianoRollControl`：移除 `PianoRollViewMode` 枚舉、`ViewMode` 屬性、`RenderVerticalFalling` 繪製路徑、垂直命中測試與時間換算分支、垂直小節標籤快取，以及先前為垂直模式小節數字設計的由上而下擦除動畫（`RevealMasks`／`EraseMasks` 漸層遮罩查表與 `CreateWipeMaskBrush`）。
+2. `MainWindow`：移除工具列「切換檢視模式（⇄/⬇）」按鈕與 `BtnToggleViewMode_Click`／`SetPianoRollViewMode`／`UpdateViewModeButtonVisual`；`CaptureScreenshotAt` 移除檢視模式參數；UI 自我測試移除模式切換項目。
+3. `ThemeManager`：移除「記憶上次卷軸檢視模式」偏好（`LastViewMode`）之儲存、載入與 API；舊 `user_preferences.json` 之殘留欄位由反序列化自動忽略。
+4. `App`：`--capture-ui` 僅保留水平模式截圖（移除 `ui_vertical_trio.png`）。
+5. 文件同步：README、USER_GUIDE、ARCHITECTURE、SYSTEM_DESIGN 與 About 視窗文字更新為水平時間軸單一模式。
+
+### ✅ 驗證
+- `dotnet build -c Debug`：0 警告、0 錯誤。
+- `--verify-all` 全數 PASS（UI 自我測試不含模式切換）。
+- 專案內 `VerticalFalling`／`ViewMode`／`LastViewMode` 完全清除。
+
+---
+
 ## 📅 2026-10-29 — v1.2.1 MuseScore 鋼琴悶／無聲修正與 MeltySynth 原始碼內嵌
 
 ### 🎯 問題與根因

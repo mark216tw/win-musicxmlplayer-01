@@ -73,7 +73,7 @@
                                    FontWeight="Bold"
                                    Foreground="{DynamicResource AccentBlueBrush}"
                                    Margin="0,0,0,5"/>
-                        <TextBlock Text="專為 MusicXML (.musicxml / .xml / .mxl) 樂譜設計的互動式視覺化與真實樂器取樣播放軟體。支援多聲部自動分離、反覆記號展開、各聲部獨立靜音/獨奏/音量與音色切換，並結合水平時間軸、垂直瀑布流卷軸與 88 鍵動態鋼琴模擬鍵盤。"
+                        <TextBlock Text="專為 MusicXML (.musicxml / .xml / .mxl) 樂譜設計的互動式視覺化與真實樂器取樣播放軟體。支援多聲部自動分離、反覆記號展開、各聲部獨立靜音/獨奏/音量與音色切換，並結合水平時間軸卷軸與 88 鍵動態鋼琴模擬鍵盤。"
                                    FontSize="12.5"
                                    LineHeight="19"
                                    Foreground="{DynamicResource TextPrimaryBrush}"

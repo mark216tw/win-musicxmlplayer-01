@@ -156,10 +156,6 @@ namespace WinMusicXmlPlayer
             RefreshTrackSoundFontRouting();
 
             PianoRoll.VisibleWindowSeconds = ThemeManager.LastVisibleWindowSeconds;
-            PianoRollViewMode savedMode = ThemeManager.LastViewMode == 1
-                ? PianoRollViewMode.VerticalFalling
-                : PianoRollViewMode.HorizontalTimeline;
-            SetPianoRollViewMode(savedMode, savePref: false);
             RefreshRecentFilesMenu();
             SliderMasterVolume.Value = Math.Round(ThemeManager.MasterVolume * 20.0) / 20.0;
             _audioEngine.MasterVolume = SliderMasterVolume.Value;
@@ -671,7 +667,6 @@ namespace WinMusicXmlPlayer
 
             var after = ThemeManager.CreatePerformanceOptions();
             _audioEngine.UseInstrumentSpatialProfile = after.InstrumentSpatialProfile;
-            UpdateViewModeButtonVisual(PianoRoll.ViewMode);
             _audioEngine.ReverbAmount = ThemeManager.ReverbAmount;
             _audioEngine.ChorusAmount = ThemeManager.ChorusAmount;
             _audioEngine.UpdateEffectsSends();
@@ -766,37 +761,6 @@ namespace WinMusicXmlPlayer
             if (!IsLoaded || string.IsNullOrEmpty(_currentFilePath)) return;
             bool wasPlaying = _audioEngine.IsPlaying;
             LoadMusicXmlFile(_currentFilePath, autoPlay: wasPlaying);
-        }
-
-        // ==================== 鋼琴卷軸單一按鈕點擊切換模式 ====================
-
-        private void BtnToggleViewMode_Click(object sender, RoutedEventArgs e)
-        {
-            var next = PianoRoll.ViewMode == PianoRollViewMode.HorizontalTimeline
-                ? PianoRollViewMode.VerticalFalling
-                : PianoRollViewMode.HorizontalTimeline;
-            SetPianoRollViewMode(next, savePref: true);
-        }
-
-        private void SetPianoRollViewMode(PianoRollViewMode mode, bool savePref = true)
-        {
-            if (PianoRoll == null) return;
-            PianoRoll.ViewMode = mode;
-            if (savePref)
-            {
-                ThemeManager.SetLastViewMode(mode == PianoRollViewMode.VerticalFalling ? 1 : 0);
-            }
-            UpdateViewModeButtonVisual(mode);
-        }
-
-        private void UpdateViewModeButtonVisual(PianoRollViewMode mode)
-        {
-            if (BtnToggleViewMode == null) return;
-            bool horizontal = mode == PianoRollViewMode.HorizontalTimeline;
-            BtnToggleViewMode.Content = horizontal ? "⇄" : "⬇";
-            BtnToggleViewMode.ToolTip = horizontal
-                ? "目前：水平時間軸卷軸，點擊切換為垂直下落瀑布流"
-                : "目前：垂直下落瀑布流，點擊切換為水平時間軸卷軸";
         }
 
         // ==================== 最近開啟的樂譜選單 ====================
@@ -1450,10 +1414,9 @@ namespace WinMusicXmlPlayer
             }
         }
 
-        public void CaptureScreenshotAt(string musicFilePath, double seekTimeSec, PianoRollViewMode mode, string outPngPath)
+        public void CaptureScreenshotAt(string musicFilePath, double seekTimeSec, string outPngPath)
         {
             LoadMusicXmlFile(musicFilePath, autoPlay: false);
-            SetPianoRollViewMode(mode);
 
             _audioEngine.Seek(seekTimeSec);
             PianoRoll.UpdatePlaybackTime(seekTimeSec);
@@ -1512,16 +1475,7 @@ namespace WinMusicXmlPlayer
             UpdateLayout();
             MenuHelp.IsSubmenuOpen = false;
 
-            // 3. 測試單一按鈕切換鋼琴卷軸模式
-            SetPianoRollViewMode(PianoRollViewMode.HorizontalTimeline, savePref: false);
-            BtnToggleViewMode_Click(this, new RoutedEventArgs());
-            if (PianoRoll.ViewMode != PianoRollViewMode.VerticalFalling)
-                throw new InvalidOperationException("Expected VerticalFalling after first toggle.");
-            BtnToggleViewMode_Click(this, new RoutedEventArgs());
-            if (PianoRoll.ViewMode != PianoRollViewMode.HorizontalTimeline)
-                throw new InvalidOperationException("Expected HorizontalTimeline after second toggle.");
-
-            // 4. 載入樂譜後「重置」按鈕應顯示，點擊後顯示「全部聲部已重置」Toast
+            // 3. 載入樂譜後「重置」按鈕應顯示，點擊後顯示「全部聲部已重置」Toast
             LoadMusicXmlFile(sampleMusicXmlFile, autoPlay: false);
             if (BtnResetTracks.Visibility != Visibility.Visible)
                 throw new InvalidOperationException("Expected BtnResetTracks to be Visible after loading score.");

@@ -33,6 +33,8 @@ namespace WinMusicXmlPlayer
         private int _loopState;
         private DispatcherTimer? _toastTimer;
         private DispatcherTimer? _audioRecoveryTimer;
+        private int _audioRecoveryAttempt;
+        private DateTime _audioRecoveryDeadlineUtc;
 
         public bool AutoLoadLastScore { get; set; } = true;
 
@@ -67,6 +69,7 @@ namespace WinMusicXmlPlayer
             // 音訊裝置可能在睡眠、鎖定、切換預設裝置或拔插耳機後失效，
             // 需主動重建輸出，否則程式會一直卡在沒有聲音且無法播放的狀態。
             _audioEngine.AudioOutputLost += OnAudioOutputLost;
+            _audioEngine.AudioOutputDeviceChanged += OnAudioOutputDeviceChanged;
             SystemEvents.PowerModeChanged += OnSystemPowerModeChanged;
             SystemEvents.SessionSwitch += OnSystemSessionSwitch;
             Activated += MainWindow_Activated;
@@ -201,6 +204,7 @@ namespace WinMusicXmlPlayer
             SystemEvents.SessionSwitch -= OnSystemSessionSwitch;
             Activated -= MainWindow_Activated;
             _audioEngine.AudioOutputLost -= OnAudioOutputLost;
+            _audioEngine.AudioOutputDeviceChanged -= OnAudioOutputDeviceChanged;
             _audioRecoveryTimer?.Stop();
             ThemeManager.FlushPreferences();
             _audioEngine.Dispose();
@@ -211,17 +215,21 @@ namespace WinMusicXmlPlayer
             Dispatcher.BeginInvoke(() =>
             {
                 SyncPlayButtonContent();
-                ScheduleAudioRecovery(force: true, delayMs: 600,
-                    toastMessage: $"音訊裝置已中斷（{message}），正在重新連接...");
+                StartAudioRecoverySequence($"音訊裝置已中斷（{message}），正在重新連接...", 600);
             });
+        }
+
+        private void OnAudioOutputDeviceChanged()
+        {
+            Dispatcher.BeginInvoke(() => StartAudioRecoverySequence(null, 350));
         }
 
         private void OnSystemPowerModeChanged(object sender, PowerModeChangedEventArgs e)
         {
             if (e.Mode == PowerModes.Resume)
             {
-                Dispatcher.BeginInvoke(() => ScheduleAudioRecovery(force: true, delayMs: 1200,
-                    toastMessage: "系統已從睡眠恢復，正在重新連接音訊裝置..."));
+                Dispatcher.BeginInvoke(() => StartAudioRecoverySequence(
+                    "系統已從睡眠恢復，正在重新連接音訊裝置...", 800));
             }
         }
 
@@ -229,27 +237,35 @@ namespace WinMusicXmlPlayer
         {
             if (e.Reason == SessionSwitchReason.SessionUnlock)
             {
-                Dispatcher.BeginInvoke(() => ScheduleAudioRecovery(force: false, delayMs: 800,
-                    toastMessage: "已解除鎖定，正在檢查音訊裝置..."));
+                Dispatcher.BeginInvoke(() => StartAudioRecoverySequence(
+                    "已解除鎖定，正在檢查音訊裝置...", 500));
             }
         }
 
         private void MainWindow_Activated(object? sender, EventArgs e)
         {
             // 從最小化或背景回到前景時，若裝置已失效就順手恢復
-            if (_audioEngine.IsPlaying && !_audioEngine.IsAudioOutputAlive)
+            if (_audioEngine.IsPlaying &&
+                (!_audioEngine.IsAudioOutputAlive || !_audioEngine.IsAudioOutputOnDefaultDevice))
             {
-                ScheduleAudioRecovery(force: false, delayMs: 300,
-                    toastMessage: "音訊裝置已中斷，正在重新連接...");
+                StartAudioRecoverySequence("音訊裝置已中斷，正在重新連接...", 300);
             }
         }
 
-        private void ScheduleAudioRecovery(bool force, int delayMs, string? toastMessage)
+        private void StartAudioRecoverySequence(string? toastMessage, int initialDelayMs)
         {
             if (toastMessage != null)
                 ShowToast(toastMessage);
 
+            _audioRecoveryAttempt = 0;
+            _audioRecoveryDeadlineUtc = DateTime.UtcNow.AddSeconds(20);
+            ScheduleNextAudioRecoveryAttempt(initialDelayMs);
+        }
+
+        private void ScheduleNextAudioRecoveryAttempt(int delayMs)
+        {
             _audioRecoveryTimer?.Stop();
+
             var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(delayMs) };
             _audioRecoveryTimer = timer;
             timer.Tick += (_, _) =>
@@ -258,8 +274,21 @@ namespace WinMusicXmlPlayer
                 if (ReferenceEquals(_audioRecoveryTimer, timer))
                     _audioRecoveryTimer = null;
 
-                _audioEngine.RecoverAudioOutput(force);
+                bool timedOut = DateTime.UtcNow >= _audioRecoveryDeadlineUtc;
+                _audioEngine.RecoverAudioOutput(force: true, allowWaveOutFallback: timedOut);
                 SyncPlayButtonContent();
+
+                if (timedOut)
+                    return;
+
+                bool ready = _audioEngine.IsUsingWasapiOutput &&
+                             _audioEngine.IsAudioOutputOnDefaultDevice;
+                if (ready)
+                    return;
+
+                _audioRecoveryAttempt++;
+                int nextDelayMs = Math.Min(1500 + _audioRecoveryAttempt * 750, 4000);
+                ScheduleNextAudioRecoveryAttempt(nextDelayMs);
             };
             timer.Start();
         }

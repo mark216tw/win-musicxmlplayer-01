@@ -2,6 +2,16 @@
 
 本文件記錄 **Windows MusicXML 真實音源播放器 (WinMusicXmlPlayer)** 的版本演進與功能變更。
 
+## [v1.2.4] - 2026-11-04
+
+### 🛠 修正
+- **修正休眠喚醒後聲音改從電腦內建喇叭播放**：
+  - **原因**：螢幕音訊端點在休眠期間會暫時消失，Windows 會先將預設裝置切到內建音訊；程式喚醒後過早重建輸出，`WasapiOut` 初始化失敗便 fallback 到 `WaveOutEvent` 並綁定內建喇叭。之後螢幕端點恢復時，程式沒有監聽預設裝置變更，舊串流仍停留在錯誤裝置，必須重開程式才會恢復。
+  - `AudioEngine` 改以明確的 `MMDevice` 建立 `WasapiOut`，並追蹤目前輸出裝置 ID；播放前若預設裝置已變更會自動重建。
+  - 新增 `IMMNotificationClient` 監聽 Windows 預設播放裝置、端點新增／移除／狀態變更，螢幕音訊恢復時自動切回正確裝置。
+  - 睡眠喚醒與裝置中斷恢復改為多次重試（最多 20 秒）；預設端點尚未就緒時不再立即 fallback 到 `WaveOutEvent`，避免誤綁內建喇叭。
+  - `Play()` 若目前仍使用 `WaveOutEvent` fallback，會優先嘗試升級回 WASAPI 輸出。
+
 ## [v1.2.3] - 2026-11-03
 
 ### 🚀 新增

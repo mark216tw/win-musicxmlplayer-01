@@ -5,6 +5,31 @@
 
 ---
 
+## 📅 2026-11-04 — v1.2.4 修正休眠喚醒後音訊輸出裝置錯誤
+
+### 🎯 問題與根因
+使用者回報以螢幕喇叭作為 Windows 預設輸出時，電腦休眠喚醒後程式會改從內建喇叭播放，必須關閉程式再開啟才會回到螢幕喇叭。
+
+- 螢幕音訊端點在休眠期間會暫時消失，Windows 會先將預設裝置切到內建音訊。
+- v1.2.2 的恢復流程在喚醒後僅重建一次輸出；此時螢幕端點尚未就緒，`WasapiOut.Init` 失敗後 fallback 到 `WaveOutEvent`，因而綁定內建喇叭。
+- 之後螢幕端點恢復、Windows 預設裝置也回到螢幕，但程式沒有監聽預設裝置變更，既有串流仍停留在內建喇叭。
+
+### 🛠 修正
+1. `AudioEngine` 建立 `WasapiOut` 時明確傳入 `MMDevice`，並記錄 `_currentOutputDeviceId` 與是否使用 WASAPI。
+2. `EnsureWavePlayerInitialized()` 除檢查 `PlaybackState` 外，也比對目前預設播放裝置；不同時自動重建。
+3. 新增 `IMMNotificationClient` 實作，監聽 Windows 預設播放裝置與端點新增／移除／狀態變更，並以 350ms debounce 通知 UI 重新連接。
+4. 睡眠喚醒、裝置中斷與裝置變更改為多次重試恢復（最多 20 秒）；端點尚未進入 `Active` 時不 fallback 到 `WaveOutEvent`，避免誤綁內建音訊裝置。
+5. `Play()` 若目前仍為 `WaveOutEvent` fallback，會優先嘗試升級回 WASAPI。
+6. `Dispose()` 解除端點通知註冊並釋放 COM 物件與計時器。
+
+### ✅ 驗證
+- `dotnet build -c Debug`／`Release`：0 警告、0 錯誤。
+- `--verify-all` 全數 PASS。
+- 以反射載入 `AudioEngine` 實際建立 WASAPI 輸出，確認 `IsAudioOutputAlive`、`IsUsingWasapiOutput`、`IsAudioOutputOnDefaultDevice` 皆為 `true`。
+- 實機休眠喚醒、預設裝置切換與螢幕端點恢復仍需使用者於實際設備驗證。
+
+---
+
 ## 📅 2026-11-03 — v1.2.3 新增 Windows ARM64 發行版
 
 ### 🎯 動機

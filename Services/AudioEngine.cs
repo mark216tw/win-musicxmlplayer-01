@@ -3,7 +3,11 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
+using System.Threading;
 using MeltySynth;
+using NAudio.CoreAudioApi;
+using NAudio.CoreAudioApi.Interfaces;
 using NAudio.Wave;
 using WinMusicXmlPlayer.Models;
 
@@ -34,9 +38,20 @@ namespace WinMusicXmlPlayer.Services
         // 音訊輸出裝置（WasapiOut / WaveOutEvent）在睡眠、裝置切換、拔插後會進入 Stopped；
         // 以獨立的鎖管理播放器生命週期，避免與 Read() 的 _syncLock 互相等待造成死鎖。
         private readonly object _deviceLock = new();
-        private bool _disposed;
+        private readonly object _deviceChangeLock = new();
+        private volatile bool _disposed;
         private bool _audioRecoveryInProgress;
         private int _suppressPlaybackStopped;
+
+        private MMDeviceEnumerator? _deviceEnumerator;
+        private AudioEndpointNotificationClient? _endpointNotificationClient;
+        private MMDevice? _currentWasapiDevice;
+        private string _currentOutputDeviceId = string.Empty;
+        private bool _usingWasapiOutput;
+        private Timer? _deviceChangeTimer;
+        private bool _recoveryRequested;
+        private bool _pendingRecoveryForce;
+        private bool _pendingRecoveryAllowFallback;
 
         private MusicScore? _score;
         private List<NoteEvent> _notes = new();
@@ -284,6 +299,32 @@ namespace WinMusicXmlPlayer.Services
         /// 此事件可能由背景執行緒觸發，UI 端需自行切回 Dispatcher。
         /// </summary>
         public event Action<string>? AudioOutputLost;
+
+        public event Action? AudioOutputDeviceChanged;
+
+        public bool IsUsingWasapiOutput
+        {
+            get
+            {
+                lock (_deviceLock)
+                {
+                    return _waveOut != null &&
+                           _waveOut.PlaybackState != PlaybackState.Stopped &&
+                           _usingWasapiOutput;
+                }
+            }
+        }
+
+        public bool IsAudioOutputOnDefaultDevice
+        {
+            get
+            {
+                lock (_deviceLock)
+                {
+                    return IsCurrentPlayerOnDefaultDeviceLocked();
+                }
+            }
+        }
 
         public AudioEngine()
         {
@@ -595,35 +636,158 @@ namespace WinMusicXmlPlayer.Services
             return (0, targetProg);
         }
 
-        private void EnsureWavePlayerInitialized()
+        private void EnsureWavePlayerInitialized(bool preferWasapiUpgrade = false)
         {
             lock (_deviceLock)
             {
                 if (_disposed) return;
 
-                // 播放器存在但已 Stopped，代表底層裝置已失效（睡眠醒來、切換預設裝置、拔插耳機等），
-                // 必須丟棄重建；否則所有後續播放都會被舊的無效物件卡住。
                 if (_waveOut != null)
                 {
-                    if (_waveOut.PlaybackState != PlaybackState.Stopped)
+                    bool isAlive = _waveOut.PlaybackState != PlaybackState.Stopped;
+                    bool onDefaultDevice = isAlive && IsCurrentPlayerOnDefaultDeviceLocked();
+                    bool shouldUpgrade = preferWasapiUpgrade && isAlive && !_usingWasapiOutput;
+                    if (isAlive && onDefaultDevice && !shouldUpgrade)
                         return;
 
                     DisposeWavePlayerLocked();
                 }
 
-                CreateAndStartWavePlayerLocked();
+                CreateAndStartWavePlayerLocked(allowWaveOutFallback: true);
             }
         }
 
-        private void CreateAndStartWavePlayerLocked()
+        private void EnsureDeviceEnumeratorLocked()
         {
-            _totalBytesWritten = 0;
-            _wavePosition = null;
+            if (_disposed || _deviceEnumerator != null) return;
 
             try
             {
+                var enumerator = new MMDeviceEnumerator();
+                _deviceEnumerator = enumerator;
+
+                try
+                {
+                    var client = new AudioEndpointNotificationClient(RequestOutputDeviceRefresh);
+                    if (enumerator.RegisterEndpointNotificationCallback(client) == 0)
+                        _endpointNotificationClient = client;
+                }
+                catch
+                {
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        private string? TryGetDefaultRenderDeviceIdLocked()
+        {
+            EnsureDeviceEnumeratorLocked();
+            if (_deviceEnumerator == null) return null;
+
+            try
+            {
+                using var device = _deviceEnumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+                return device.ID;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private bool IsCurrentPlayerOnDefaultDeviceLocked()
+        {
+            if (_waveOut == null || _waveOut.PlaybackState == PlaybackState.Stopped)
+                return false;
+
+            string? defaultDeviceId = TryGetDefaultRenderDeviceIdLocked();
+            if (string.IsNullOrEmpty(defaultDeviceId))
+                return true;
+
+            return !string.IsNullOrEmpty(_currentOutputDeviceId) &&
+                   string.Equals(defaultDeviceId, _currentOutputDeviceId, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private bool NeedsOutputRefreshLocked()
+        {
+            if (_waveOut == null || _waveOut.PlaybackState == PlaybackState.Stopped)
+                return true;
+
+            string? defaultDeviceId = TryGetDefaultRenderDeviceIdLocked();
+            if (string.IsNullOrEmpty(defaultDeviceId))
+                return false;
+
+            return !string.Equals(defaultDeviceId, _currentOutputDeviceId, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private void RequestOutputDeviceRefresh()
+        {
+            if (_disposed) return;
+
+            lock (_deviceChangeLock)
+            {
+                if (_disposed) return;
+
+                _deviceChangeTimer ??= new Timer(
+                    _ => ProcessPendingOutputDeviceChange(),
+                    null,
+                    Timeout.Infinite,
+                    Timeout.Infinite);
+                _deviceChangeTimer.Change(350, Timeout.Infinite);
+            }
+        }
+
+        private void ProcessPendingOutputDeviceChange()
+        {
+            if (_disposed) return;
+
+            bool shouldNotify;
+            lock (_deviceLock)
+            {
+                if (_disposed) return;
+
+                if (_audioRecoveryInProgress)
+                {
+                    _recoveryRequested = true;
+                    _pendingRecoveryForce = true;
+                    _pendingRecoveryAllowFallback = false;
+                    return;
+                }
+
+                shouldNotify = NeedsOutputRefreshLocked();
+            }
+
+            if (!shouldNotify) return;
+
+            try { AudioOutputDeviceChanged?.Invoke(); } catch { }
+        }
+
+        private void CreateAndStartWavePlayerLocked(bool allowWaveOutFallback)
+        {
+            _totalBytesWritten = 0;
+            _wavePosition = null;
+            _currentOutputDeviceId = string.Empty;
+            _usingWasapiOutput = false;
+
+            EnsureDeviceEnumeratorLocked();
+            bool canQueryDefaultDevice = _deviceEnumerator != null;
+
+            MMDevice? device = null;
+            string? defaultDeviceId = null;
+            bool defaultEndpointActive = false;
+
+            try
+            {
+                device = _deviceEnumerator?.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+                if (device == null)
+                    throw new InvalidOperationException("No default render device.");
+
+                defaultDeviceId = device.ID;
+                defaultEndpointActive = device.State == DeviceState.Active;
                 const int wasapiLatencyMs = 35;
-                var wasapi = new WasapiOut(NAudio.CoreAudioApi.AudioClientShareMode.Shared, true, wasapiLatencyMs);
+                var wasapi = new WasapiOut(device, AudioClientShareMode.Shared, true, wasapiLatencyMs);
                 wasapi.PlaybackStopped += OnWavePlaybackStopped;
                 try
                 {
@@ -639,35 +803,52 @@ namespace WinMusicXmlPlayer.Services
 
                 _waveOut = wasapi;
                 _wavePosition = wasapi;
-                // 共享模式實際延遲 ≈ 緩衝長度 + 音訊引擎週期 (~10ms)
+                _currentWasapiDevice = device;
+                device = null;
+                _currentOutputDeviceId = defaultDeviceId;
+                _usingWasapiOutput = true;
                 _outputLatencySec = (wasapiLatencyMs + 10) / 1000.0;
+                return;
             }
             catch
             {
+            }
+            finally
+            {
+                try { device?.Dispose(); } catch { }
+            }
+
+            if (!allowWaveOutFallback)
+                return;
+
+            if (canQueryDefaultDevice && !defaultEndpointActive)
+                return;
+
+            try
+            {
+                string fallbackDeviceId = defaultDeviceId ?? TryGetDefaultRenderDeviceIdLocked() ?? string.Empty;
+                var waveOut = new WaveOutEvent { DesiredLatency = 55 };
+                waveOut.PlaybackStopped += OnWavePlaybackStopped;
                 try
                 {
-                    var waveOut = new WaveOutEvent { DesiredLatency = 55 };
-                    waveOut.PlaybackStopped += OnWavePlaybackStopped;
-                    try
-                    {
-                        waveOut.Init(this);
-                        waveOut.Play();
-                    }
-                    catch
-                    {
-                        waveOut.PlaybackStopped -= OnWavePlaybackStopped;
-                        try { waveOut.Dispose(); } catch { }
-                        throw;
-                    }
-
-                    _waveOut = waveOut;
-                    _wavePosition = waveOut;
-                    _outputLatencySec = 0.055;
+                    waveOut.Init(this);
+                    waveOut.Play();
                 }
                 catch
                 {
-                    // 無音訊輸出裝置時仍維持時間推進
+                    waveOut.PlaybackStopped -= OnWavePlaybackStopped;
+                    try { waveOut.Dispose(); } catch { }
+                    throw;
                 }
+
+                _waveOut = waveOut;
+                _wavePosition = waveOut;
+                _currentOutputDeviceId = fallbackDeviceId;
+                _usingWasapiOutput = false;
+                _outputLatencySec = 0.055;
+            }
+            catch
+            {
             }
         }
 
@@ -677,19 +858,26 @@ namespace WinMusicXmlPlayer.Services
             _waveOut = null;
             _wavePosition = null;
             _totalBytesWritten = 0;
-            if (player == null) return;
+            _currentOutputDeviceId = string.Empty;
+            _usingWasapiOutput = false;
 
-            Interlocked.Exchange(ref _suppressPlaybackStopped, 1);
-            try
+            if (player != null)
             {
-                player.PlaybackStopped -= OnWavePlaybackStopped;
-                try { player.Stop(); } catch { }
-                try { player.Dispose(); } catch { }
+                Interlocked.Exchange(ref _suppressPlaybackStopped, 1);
+                try
+                {
+                    player.PlaybackStopped -= OnWavePlaybackStopped;
+                    try { player.Stop(); } catch { }
+                    try { player.Dispose(); } catch { }
+                }
+                finally
+                {
+                    Interlocked.Exchange(ref _suppressPlaybackStopped, 0);
+                }
             }
-            finally
-            {
-                Interlocked.Exchange(ref _suppressPlaybackStopped, 0);
-            }
+
+            try { _currentWasapiDevice?.Dispose(); } catch { }
+            _currentWasapiDevice = null;
         }
 
         private void OnWavePlaybackStopped(object? sender, StoppedEventArgs e)
@@ -728,37 +916,45 @@ namespace WinMusicXmlPlayer.Services
         /// 重新建立音訊輸出裝置。用於睡眠喚醒、鎖定解除、預設裝置切換或播放中斷後恢復。
         /// 會清除殘留發聲並從目前播放位置續播（若中斷前正在播放）。
         /// </summary>
-        public void RecoverAudioOutput(bool force = false)
+        public void RecoverAudioOutput(bool force = false, bool allowWaveOutFallback = true)
         {
-            bool wasPlaying;
             lock (_deviceLock)
             {
-                if (_disposed || _audioRecoveryInProgress) return;
-                if (!force && _waveOut != null && _waveOut.PlaybackState != PlaybackState.Stopped) return;
+                if (_disposed) return;
+
+                if (_audioRecoveryInProgress)
+                {
+                    _recoveryRequested = true;
+                    _pendingRecoveryForce |= force;
+                    _pendingRecoveryAllowFallback |= allowWaveOutFallback;
+                    return;
+                }
+
                 _audioRecoveryInProgress = true;
             }
 
             try
             {
-                lock (_syncLock)
-                {
-                    wasPlaying = _isPlaying;
-                    ResetVisualClock(_currentTimeSec);
-                }
+                bool currentForce = force;
+                bool currentAllowFallback = allowWaveOutFallback;
 
-                lock (_deviceLock)
+                while (true)
                 {
-                    DisposeWavePlayerLocked();
-                }
+                    PerformAudioOutputRecovery(currentForce, currentAllowFallback);
 
-                EnsureWavePlayerInitialized();
-
-                if (wasPlaying && _score != null)
-                {
-                    lock (_syncLock)
+                    lock (_deviceLock)
                     {
-                        ResetVisualClock(_currentTimeSec);
-                        _isPlaying = true;
+                        if (!_recoveryRequested)
+                        {
+                            _audioRecoveryInProgress = false;
+                            break;
+                        }
+
+                        _recoveryRequested = false;
+                        currentForce = _pendingRecoveryForce;
+                        currentAllowFallback = _pendingRecoveryAllowFallback;
+                        _pendingRecoveryForce = false;
+                        _pendingRecoveryAllowFallback = false;
                     }
                 }
             }
@@ -767,6 +963,41 @@ namespace WinMusicXmlPlayer.Services
                 lock (_deviceLock)
                 {
                     _audioRecoveryInProgress = false;
+                }
+            }
+        }
+
+        private void PerformAudioOutputRecovery(bool force, bool allowWaveOutFallback)
+        {
+            bool wasPlaying;
+            lock (_syncLock)
+            {
+                wasPlaying = _isPlaying;
+                ResetVisualClock(_currentTimeSec);
+            }
+
+            lock (_deviceLock)
+            {
+                if (_disposed) return;
+
+                if (!force &&
+                    _waveOut != null &&
+                    _waveOut.PlaybackState != PlaybackState.Stopped &&
+                    IsCurrentPlayerOnDefaultDeviceLocked())
+                {
+                    return;
+                }
+
+                DisposeWavePlayerLocked();
+                CreateAndStartWavePlayerLocked(allowWaveOutFallback);
+            }
+
+            if (wasPlaying && _score != null)
+            {
+                lock (_syncLock)
+                {
+                    ResetVisualClock(_currentTimeSec);
+                    _isPlaying = true;
                 }
             }
         }
@@ -1104,7 +1335,7 @@ namespace WinMusicXmlPlayer.Services
 
         public void Play()
         {
-            EnsureWavePlayerInitialized();
+            EnsureWavePlayerInitialized(preferWasapiUpgrade: true);
             lock (_syncLock)
             {
                 if (_score == null) return;
@@ -1588,10 +1819,77 @@ namespace WinMusicXmlPlayer.Services
         public void Dispose()
         {
             _disposed = true;
+
+            lock (_deviceChangeLock)
+            {
+                _deviceChangeTimer?.Dispose();
+                _deviceChangeTimer = null;
+            }
+
+            MMDeviceEnumerator? enumerator;
+            AudioEndpointNotificationClient? notificationClient;
+
             lock (_deviceLock)
             {
                 DisposeWavePlayerLocked();
+                enumerator = _deviceEnumerator;
+                notificationClient = _endpointNotificationClient;
+                _deviceEnumerator = null;
+                _endpointNotificationClient = null;
             }
+
+            if (enumerator != null)
+            {
+                if (notificationClient != null)
+                {
+                    try { enumerator.UnregisterEndpointNotificationCallback(notificationClient); } catch { }
+                }
+
+                try { enumerator.Dispose(); } catch { }
+            }
+        }
+    }
+
+    [ComVisible(true)]
+    [ClassInterface(ClassInterfaceType.None)]
+    internal sealed class AudioEndpointNotificationClient : IMMNotificationClient
+    {
+        private readonly Action _onDeviceChanged;
+
+        public AudioEndpointNotificationClient(Action onDeviceChanged)
+        {
+            _onDeviceChanged = onDeviceChanged;
+        }
+
+        public void OnDeviceStateChanged(string deviceId, DeviceState newState)
+        {
+            Notify();
+        }
+
+        public void OnDeviceAdded(string pwstrDeviceId)
+        {
+            Notify();
+        }
+
+        public void OnDeviceRemoved(string deviceId)
+        {
+            Notify();
+        }
+
+        public void OnDefaultDeviceChanged(DataFlow flow, Role role, string defaultDeviceId)
+        {
+            if (flow != DataFlow.Render) return;
+            if (role != Role.Multimedia && role != Role.Console) return;
+            Notify();
+        }
+
+        public void OnPropertyValueChanged(string pwstrDeviceId, PropertyKey key)
+        {
+        }
+
+        private void Notify()
+        {
+            try { _onDeviceChanged(); } catch { }
         }
     }
 }

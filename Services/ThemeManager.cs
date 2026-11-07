@@ -295,7 +295,7 @@ namespace WinMusicXmlPlayer.Services
 
         public static void SetDynamicRangePercent(int value)
         {
-            int clamped = Math.Clamp(value, 50, 150);
+            int clamped = Math.Clamp(value, 0, 150);
             if (_dynamicRangePercent == clamped) return;
             _dynamicRangePercent = clamped;
             _preferencesDirty = true;
@@ -880,7 +880,7 @@ namespace WinMusicXmlPlayer.Services
                     }
                     _humanizeAmount = Math.Clamp(data.HumanizeAmount, 0, 100);
                     _velocityCurve = Math.Clamp(data.VelocityCurve, 0, 2);
-                    _dynamicRangePercent = Math.Clamp(data.DynamicRangePercent, 50, 150);
+                    _dynamicRangePercent = Math.Clamp(data.DynamicRangePercent, 0, 150);
                     _autoPianoPedal = data.AutoPianoPedal;
                     _autoVibrato = data.AutoVibrato;
                     _instrumentSpatialProfile = data.InstrumentSpatialProfile;

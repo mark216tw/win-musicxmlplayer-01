@@ -317,6 +317,13 @@ namespace WinMusicXmlPlayer
             ThemeManager.SetDynamicRangePercent(value);
         }
 
+        private void BtnResetDynamicRange_Click(object sender, RoutedEventArgs e)
+        {
+            SliderDynamicRange.Value = 70;
+            TxtDynamicRangeValue.Text = "70%";
+            ThemeManager.SetDynamicRangePercent(70);
+        }
+
         private void ComboVelocityCurve_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             if (_isSyncingUi || !IsLoaded) return;

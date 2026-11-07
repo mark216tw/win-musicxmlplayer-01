@@ -463,6 +463,43 @@ namespace WinMusicXmlPlayer
             </score-partwise>
             """;
 
+        private const string DynamicRangeTestMusicXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <score-partwise version="3.1">
+              <part-list>
+                <score-part id="P1"><part-name>Piano</part-name></score-part>
+              </part-list>
+              <part id="P1">
+                <measure number="1">
+                  <attributes>
+                    <divisions>1</divisions>
+                    <key><fifths>0</fifths></key>
+                    <time><beats>4</beats><beat-type>4</beat-type></time>
+                    <clef><sign>G</sign><line>2</line></clef>
+                  </attributes>
+                  <direction>
+                    <direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>60</per-minute></metronome></direction-type>
+                    <sound tempo="60"/>
+                  </direction>
+                  <direction>
+                    <direction-type><dynamics><pp/></dynamics></direction-type>
+                  </direction>
+                  <note>
+                    <pitch><step>C</step><octave>4</octave></pitch>
+                    <duration>2</duration><type>half</type>
+                  </note>
+                  <direction>
+                    <direction-type><dynamics><ff/></dynamics></direction-type>
+                  </direction>
+                  <note>
+                    <pitch><step>G</step><octave>4</octave></pitch>
+                    <duration>2</duration><type>half</type>
+                  </note>
+                </measure>
+              </part>
+            </score-partwise>
+            """;
+
         private static bool RunPerformanceExpressionSelfTest(StringBuilder sb)
         {
             string path = Path.Combine(Path.GetTempPath(), "wmp-performance-selftest.musicxml");
@@ -571,6 +608,45 @@ namespace WinMusicXmlPlayer
                 {
                     sb.AppendLine("[FAIL] Delayed vibrato automation test failed.");
                     return false;
+                }
+
+                string rangePath = Path.Combine(Path.GetTempPath(), "wmp-dynamic-range-selftest.musicxml");
+                try
+                {
+                    File.WriteAllText(rangePath, DynamicRangeTestMusicXml, new UTF8Encoding(false));
+
+                    var wideRangeOptions = new PerformanceOptions
+                    {
+                        HumanizeAmount = 0,
+                        VelocityCurve = VelocityCurveMode.Linear,
+                        DynamicRangePercent = 100,
+                        AutoPianoPedal = false,
+                        AutoVibrato = false,
+                        InstrumentSpatialProfile = false
+                    };
+                    var narrowRangeOptions = new PerformanceOptions
+                    {
+                        HumanizeAmount = 0,
+                        VelocityCurve = VelocityCurveMode.Linear,
+                        DynamicRangePercent = 0,
+                        AutoPianoPedal = false,
+                        AutoVibrato = false,
+                        InstrumentSpatialProfile = false
+                    };
+
+                    var wideScore = MusicXmlLoader.LoadFromFile(rangePath, expandRepeats: true, wideRangeOptions);
+                    var narrowScore = MusicXmlLoader.LoadFromFile(rangePath, expandRepeats: true, narrowRangeOptions);
+                    int wideSpread = wideScore.Notes.Max(n => n.Velocity) - wideScore.Notes.Min(n => n.Velocity);
+                    int narrowSpread = narrowScore.Notes.Max(n => n.Velocity) - narrowScore.Notes.Min(n => n.Velocity);
+                    if (wideSpread < 30 || narrowSpread > wideSpread / 2)
+                    {
+                        sb.AppendLine($"[FAIL] Dynamic range compression test failed (wide={wideSpread}, narrow={narrowSpread}).");
+                        return false;
+                    }
+                }
+                finally
+                {
+                    try { File.Delete(rangePath); } catch { }
                 }
 
                 return true;

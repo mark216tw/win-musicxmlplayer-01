@@ -478,6 +478,7 @@
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="65"/>
+                            <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="0"
                                    Text="動態範圍"
@@ -487,12 +488,13 @@
                                    Margin="0,0,10,0"/>
                         <Slider x:Name="SliderDynamicRange"
                                 Grid.Column="1"
-                                Minimum="50"
+                                Minimum="0"
                                 Maximum="150"
                                 TickFrequency="5"
                                 IsSnapToTickEnabled="True"
                                 ValueChanged="SliderDynamicRange_ValueChanged"
-                                VerticalAlignment="Center"/>
+                                VerticalAlignment="Center"
+                                ToolTip="數值越小，力度之間的音量差距越小；0% 幾乎等音量"/>
                         <TextBlock x:Name="TxtDynamicRangeValue"
                                    Grid.Column="2"
                                    Text="70%"
@@ -501,7 +503,22 @@
                                    Foreground="{DynamicResource AccentPrimaryBrush}"
                                    HorizontalAlignment="Right"
                                    VerticalAlignment="Center"/>
+                        <Button x:Name="BtnResetDynamicRange"
+                                Grid.Column="3"
+                                Content="推薦 (70)"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                Padding="7,3"
+                                FontSize="11"
+                                Margin="8,0,0,0"
+                                VerticalAlignment="Center"
+                                Click="BtnResetDynamicRange_Click"
+                                ToolTip="重設為推薦的 70% 動態範圍"/>
                     </Grid>
+                    <TextBlock Text="數值越小，力度之間的音量差距越小；0% 幾乎等音量（仍保留重音與裝飾音表情）。"
+                               FontSize="10.5"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               Margin="0,4,0,0"
+                               TextWrapping="Wrap"/>
 
                     <Grid Margin="0,8,0,0">
                         <Grid.ColumnDefinitions>

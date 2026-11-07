@@ -2398,7 +2398,7 @@ namespace WinMusicXmlPlayer.Services
                 _ => normalized
             };
 
-            double rangeFactor = Math.Clamp(performance.DynamicRangePercent, 50, 150) / 100.0;
+            double rangeFactor = Math.Clamp(performance.DynamicRangePercent, 0, 150) / 100.0;
             const double center = 0.62;
             normalized = Math.Clamp(center + (normalized - center) * rangeFactor, 0.0, 1.0);
 

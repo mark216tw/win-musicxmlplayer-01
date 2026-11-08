@@ -1411,6 +1411,12 @@ namespace WinMusicXmlPlayer
             SliderSpeed.Value = 1.0;
         }
 
+        private void TxtSpeedValue_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            e.Handled = true;
+            SliderSpeed.Value = 1.0;
+        }
+
         private void SliderMasterVolume_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
             if (_audioEngine == null || TxtMasterVolume == null) return;

@@ -750,7 +750,10 @@
                                    FontSize="12"
                                    FontWeight="Bold"
                                    VerticalAlignment="Center"
-                                   Margin="4,0,3,0"/>
+                                   Margin="4,0,3,0"
+                                   Cursor="Hand"
+                                   MouseLeftButtonDown="TxtSpeedValue_MouseLeftButtonDown"
+                                   ToolTip="點擊回到 1.00x"/>
                         <Button Style="{StaticResource ToolbarButtonStyle}"
                                 Padding="5,2"
                                 FontSize="11"

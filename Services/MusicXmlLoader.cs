@@ -136,6 +136,7 @@ namespace WinMusicXmlPlayer.Services
             public string PartId { get; set; } = string.Empty;
             public double StartSeconds { get; set; }
             public double EndSeconds { get; set; }
+            public bool IsImplicit { get; set; }
         }
 
         private sealed class ExpressionKeyframe
@@ -790,6 +791,27 @@ namespace WinMusicXmlPlayer.Services
                                 }
                             }
 
+                            if (isChord)
+                            {
+                                for (int prevIdx = noteList.Count - 1; prevIdx >= 0; prevIdx--)
+                                {
+                                    var prevNote = noteList[prevIdx];
+                                    if (prevNote.IsGrace)
+                                        continue;
+                                    if (prevNote.Staff != rawNote.Staff || prevNote.Voice != rawNote.Voice)
+                                        continue;
+                                    if (Math.Abs(prevNote.BeatStart - rawNote.BeatStart) > 0.0001)
+                                        continue;
+
+                                    rawNote.HasStaccato |= prevNote.HasStaccato;
+                                    rawNote.HasStaccatissimo |= prevNote.HasStaccatissimo;
+                                    rawNote.HasDetachedLegato |= prevNote.HasDetachedLegato;
+                                    rawNote.HasTenuto |= prevNote.HasTenuto;
+                                    rawNote.HasAccent |= prevNote.HasAccent;
+                                    break;
+                                }
+                            }
+
                             rawNote.InSlur = activeSlur || inSlurBefore;
                             rawNote.IsSlurStart = slurStartHere;
                             rawNote.HasPizzicato = rawNote.HasPizzicato || activePizzicato;
@@ -1112,6 +1134,8 @@ namespace WinMusicXmlPlayer.Services
             bool isPianoStringsChamber = score.Tracks.Any(t => t.GmProgram is >= 0 and <= 5) && score.Tracks.Any(t => IsStringProgram(t.GmProgram));
 
             var allNotes = new List<NoteEvent>(4096);
+            // 逐聲部追蹤前一個音的實際發聲結束時間，供裝飾音計算拍前可用空間
+            var lastVoiceEndSec = new Dictionary<(int trackIdx, int voice), double>();
             // �Ω��p�`�ΦP�p�`�s���u (Tie) �X�֡G(trackIndex, midiPitch) -> ���b���򤤪� NoteEvent
             var activeTiedNotes = new Dictionary<(int trackIdx, int pitch), NoteEvent>();
 
@@ -1371,9 +1395,16 @@ namespace WinMusicXmlPlayer.Services
                             double singleGraceSec = Math.Clamp(secPerBeat * 0.11, 0.032, 0.052);
                             double totalGraceSec = singleGraceSec * gCount;
 
-                            // 一半取自拍前、一半取自本音開頭，讓土耳其進行曲三連裝飾音既準拍又俐落
-                            double preSteal = Math.Min(noteStartSec - currentTimeSec, totalGraceSec * 0.55);
-                            double postSteal = Math.Min(noteDurSec * 0.45, totalGraceSec - preSteal);
+                            // 以同聲部前一個實際發聲結束點計算拍前可用空間，避免小節首拍把主音往後推
+                            var voiceKey = (trackIdx, rNote.Voice);
+                            double previousEndSec = lastVoiceEndSec.TryGetValue(voiceKey, out double prevEnd)
+                                ? prevEnd
+                                : 0.0;
+                            double availableLeadSec = Math.Max(0.0, noteStartSec - previousEndSec);
+
+                            // 裝飾音優先安排在拍點前；僅在拍前空間不足時才從主音開頭吸收
+                            double preSteal = Math.Min(availableLeadSec, totalGraceSec);
+                            double postSteal = Math.Min(noteDurSec * 0.35, totalGraceSec - preSteal);
                             double graceGroupStart = noteStartSec - preSteal;
 
                             for (int g = 0; g < gCount; g++)
@@ -1421,6 +1452,7 @@ namespace WinMusicXmlPlayer.Services
                             double newEnd = noteStartSec + noteDurSec;
                             prevTiedNote.DurationSeconds = Math.Max(prevTiedNote.DurationSeconds, newEnd - prevTiedNote.StartTimeSeconds);
                             prevTiedNote.AudioDurationSeconds = prevTiedNote.DurationSeconds * 0.99;
+                            lastVoiceEndSec[(trackIdx, rNote.Voice)] = prevTiedNote.AudioEndTimeSeconds;
 
                             if (!rNote.TieStart)
                                 activeTiedNotes.Remove(tieKey);
@@ -1434,6 +1466,7 @@ namespace WinMusicXmlPlayer.Services
                             if (bowNotes.Count > 1)
                             {
                                 allNotes.AddRange(bowNotes);
+                                lastVoiceEndSec[(trackIdx, rNote.Voice)] = noteStartSec + noteDurSec;
                                 continue;
                             }
                         }
@@ -1443,6 +1476,7 @@ namespace WinMusicXmlPlayer.Services
                         {
                             var ornNotes = ExpandOrnamentNote(rNote, track, meta.Fifths, noteStartSec, noteDurSec, velocity, secPerBeat);
                             allNotes.AddRange(ornNotes);
+                            lastVoiceEndSec[(trackIdx, rNote.Voice)] = noteStartSec + noteDurSec;
                             continue;
                         }
 
@@ -1521,10 +1555,12 @@ namespace WinMusicXmlPlayer.Services
                             Voice = rNote.Voice,
                             IsSfpDecay = rNote.IsSfp,
                             IsArpeggiated = arpeggioOffsetsSec.ContainsKey(rNote),
+                            IsDetached = rNote.HasStaccato || rNote.HasStaccatissimo,
                             ArticulationLabel = artLabel
                         };
 
                         allNotes.Add(noteEvt);
+                        lastVoiceEndSec[(trackIdx, rNote.Voice)] = noteEvt.AudioEndTimeSeconds;
 
                         if (rNote.TieStart)
                         {
@@ -1804,7 +1840,7 @@ namespace WinMusicXmlPlayer.Services
                     double clampedEnd = Math.Min(segEnd - 0.030, segStart + 2.5);
                     if (clampedEnd > segStart + 0.15)
                     {
-                        AddPedalInterval(pedalIntervals, partId, segStart, clampedEnd);
+                        AddPedalInterval(pedalIntervals, partId, segStart, clampedEnd, isImplicit: true);
                     }
                 }
             }
@@ -1971,7 +2007,8 @@ namespace WinMusicXmlPlayer.Services
             List<PedalInterval> intervals,
             string partId,
             double startSeconds,
-            double endSeconds)
+            double endSeconds,
+            bool isImplicit = false)
         {
             if (endSeconds <= startSeconds + 0.001)
                 return;
@@ -1980,7 +2017,8 @@ namespace WinMusicXmlPlayer.Services
             {
                 PartId = partId,
                 StartSeconds = startSeconds,
-                EndSeconds = endSeconds
+                EndSeconds = endSeconds,
+                IsImplicit = isImplicit
             });
         }
 
@@ -2019,6 +2057,9 @@ namespace WinMusicXmlPlayer.Services
 
                 foreach (var interval in partIntervals)
                 {
+                    if (interval.IsImplicit && (note.IsDetached || note.IsOrnamentSubNote))
+                        continue;
+
                     if (interval.StartSeconds <= note.StartTimeSeconds && note.StartTimeSeconds < interval.EndSeconds)
                     {
                         newEnd = Math.Max(newEnd, interval.EndSeconds);

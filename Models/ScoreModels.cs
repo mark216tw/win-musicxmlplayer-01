@@ -405,6 +405,7 @@ namespace WinMusicXmlPlayer.Models
         public bool IsOrnamentSubNote { get; set; }
         public bool IsSfpDecay { get; set; }
         public bool IsArpeggiated { get; set; }
+        public bool IsDetached { get; set; }
         public string ArticulationLabel { get; set; } = string.Empty;
 
         public string PitchName => GetPitchName(MidiPitch);

@@ -13,8 +13,8 @@
 
 ### 啟動步驟
 1. 解壓縮對應平台的發行版壓縮檔：
-   - x64：`WinMusicXmlPlayer-v1.2.5-win-x64.zip`
-   - ARM64：`WinMusicXmlPlayer-v1.2.5-win-arm64.zip`
+   - x64：`WinMusicXmlPlayer-v1.2.6-win-x64.zip`
+   - ARM64：`WinMusicXmlPlayer-v1.2.6-win-arm64.zip`
 2. 確認 `Assets\SoundFonts\TimGM6mb.sf2` 隨附於程式目錄下。
 3. 雙擊 `WinMusicXmlPlayer.exe` 啟動程式；啟動後左下角狀態列會顯示：`目前音源：TimGM6mb.sf2 (真實樂器取樣)`。
 4. 若上次成功開啟的樂譜仍存在，啟動時會自動載入並停在 `00:00.0`（不自動播放）；若檔案已不存在或無法讀取，則維持空白畫面。

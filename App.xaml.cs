@@ -500,6 +500,37 @@ namespace WinMusicXmlPlayer
             </score-partwise>
             """;
 
+        private const string GraceTimingTestMusicXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <score-partwise version="3.1">
+              <part-list>
+                <score-part id="P1"><part-name>Piano</part-name></score-part>
+              </part-list>
+              <part id="P1">
+                <measure number="1">
+                  <attributes>
+                    <divisions>8</divisions>
+                    <key><fifths>0</fifths></key>
+                    <time><beats>2</beats><beat-type>4</beat-type></time>
+                    <clef><sign>G</sign><line>2</line></clef>
+                  </attributes>
+                  <direction>
+                    <direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>120</per-minute></metronome></direction-type>
+                    <sound tempo="120"/>
+                  </direction>
+                  <note><rest/><duration>16</duration><voice>1</voice><type>half</type></note>
+                </measure>
+                <measure number="2">
+                  <note><grace/><pitch><step>A</step><octave>2</octave></pitch><voice>1</voice><type>32nd</type></note>
+                  <note><grace/><pitch><step>C</step><alter>1</alter><octave>3</octave></pitch><voice>1</voice><type>32nd</type></note>
+                  <note><grace/><pitch><step>E</step><octave>3</octave></pitch><voice>1</voice><type>32nd</type></note>
+                  <note><pitch><step>A</step><octave>3</octave></pitch><duration>8</duration><voice>1</voice><type>quarter</type></note>
+                  <note><rest/><duration>8</duration><voice>1</voice><type>quarter</type></note>
+                </measure>
+              </part>
+            </score-partwise>
+            """;
+
         private static bool RunPerformanceExpressionSelfTest(StringBuilder sb)
         {
             string path = Path.Combine(Path.GetTempPath(), "wmp-performance-selftest.musicxml");
@@ -647,6 +678,38 @@ namespace WinMusicXmlPlayer
                 finally
                 {
                     try { File.Delete(rangePath); } catch { }
+                }
+
+                string gracePath = Path.Combine(Path.GetTempPath(), "wmp-grace-timing-selftest.musicxml");
+                try
+                {
+                    File.WriteAllText(gracePath, GraceTimingTestMusicXml, new UTF8Encoding(false));
+
+                    var graceOptions = new PerformanceOptions
+                    {
+                        HumanizeAmount = 0,
+                        VelocityCurve = VelocityCurveMode.Linear,
+                        DynamicRangePercent = 100,
+                        AutoPianoPedal = false,
+                        AutoVibrato = false
+                    };
+                    var graceScore = MusicXmlLoader.LoadFromFile(gracePath, expandRepeats: true, graceOptions);
+                    var graceNotes = graceScore.Notes.Where(n => n.IsOrnamentSubNote).OrderBy(n => n.StartTimeSeconds).ToList();
+                    var gracePrincipal = graceScore.Notes.FirstOrDefault(n => n.MidiPitch == 57 && !n.IsOrnamentSubNote);
+                    double beatTwoStart = graceScore.Measures.Count > 1 ? graceScore.Measures[1].StartTimeSeconds : 1.0;
+
+                    if (graceNotes.Count != 3 ||
+                        gracePrincipal == null ||
+                        graceNotes[^1].StartTimeSeconds >= beatTwoStart ||
+                        Math.Abs(gracePrincipal.StartTimeSeconds - beatTwoStart) > 0.030)
+                    {
+                        sb.AppendLine("[FAIL] Grace-note downbeat alignment test failed.");
+                        return false;
+                    }
+                }
+                finally
+                {
+                    try { File.Delete(gracePath); } catch { }
                 }
 
                 return true;

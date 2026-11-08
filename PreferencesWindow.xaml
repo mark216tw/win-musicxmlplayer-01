@@ -93,7 +93,7 @@
                        FontSize="17"
                        FontWeight="Bold"
                        Foreground="{DynamicResource TextPrimaryBrush}"/>
-            <TextBlock Text="變更顯示模式、視窗樣式主題或主題色彩後將立即套用至整個播放器介面"
+            <TextBlock Text="介面調整會立即套用；演奏設定變更後會自動重新載入目前樂曲"
                        FontSize="12"
                        Foreground="{DynamicResource TextSecondaryBrush}"
                        Margin="0,3,0,0"/>
@@ -102,6 +102,19 @@
         <!-- 設定項目卡片區 -->
         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Focusable="False">
             <StackPanel Margin="0,0,6,0">
+                <!-- 介面設定分區標題 -->
+                <StackPanel Orientation="Horizontal" Margin="2,0,0,8">
+                    <Border Width="3" Height="16"
+                            CornerRadius="2"
+                            Background="{DynamicResource AccentPrimaryBrush}"
+                            Margin="0,0,8,0"/>
+                    <TextBlock Text="介面設定"
+                               FontSize="12.5"
+                               FontWeight="Bold"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               VerticalAlignment="Center"/>
+                </StackPanel>
+
                 <!-- 1. 語言設定 -->
             <Border Background="{DynamicResource BgSecondaryBrush}"
                     BorderBrush="{DynamicResource BorderSubtleBrush}"
@@ -336,13 +349,30 @@
                 </StackPanel>
             </Border>
 
+            <!-- 演奏設定分區：分隔線 + 標題 -->
+            <Border Height="1"
+                    Background="{DynamicResource BorderSubtleBrush}"
+                    Opacity="0.6"
+                    Margin="0,14,0,14"/>
+            <StackPanel Orientation="Horizontal" Margin="2,0,0,8">
+                <Border Width="3" Height="16"
+                        CornerRadius="2"
+                        Background="{DynamicResource AccentGreenBrush}"
+                        Margin="0,0,8,0"/>
+                <TextBlock Text="演奏設定"
+                           FontSize="12.5"
+                           FontWeight="Bold"
+                           Foreground="{DynamicResource TextSecondaryBrush}"
+                           VerticalAlignment="Center"/>
+            </StackPanel>
+
             <!-- 5. 演奏與音場 -->
             <Border Background="{DynamicResource BgSecondaryBrush}"
                     BorderBrush="{DynamicResource BorderSubtleBrush}"
                     BorderThickness="1"
                     CornerRadius="{DynamicResource CardCornerRadius}"
                     Padding="14,10"
-                    Margin="0,10,0,0">
+                    Margin="0,0,0,10">
                 <StackPanel>
                     <TextBlock Text="🎻 演奏與音場"
                                FontSize="13.5"

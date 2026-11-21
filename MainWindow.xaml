@@ -209,9 +209,6 @@
                     <MenuItem x:Name="MenuRecentFiles"
                               Header="最近開啟的樂譜"
                               Style="{StaticResource SystemMenuItemStyle}"/>
-                    <MenuItem Header="跳轉至指定小節 (Ctrl+G)"
-                              Style="{StaticResource SystemMenuItemStyle}"
-                              Click="MenuGotoMeasure_Click"/>
                     <MenuItem Header="匯出 WAV 音訊檔 (Ctrl+E)"
                               Style="{StaticResource SystemMenuItemStyle}"
                               Click="MenuExportWav_Click"/>
@@ -229,6 +226,12 @@
                     <MenuItem Header="音源設定 (Ctrl+M)"
                               Style="{StaticResource SystemMenuItemStyle}"
                               Click="MenuSoundFontSettings_Click"/>
+                    <MenuItem x:Name="MenuRecentPianoSoundFonts"
+                              Header="最近鋼琴專用音源"
+                              Style="{StaticResource SystemMenuItemStyle}"/>
+                    <MenuItem x:Name="MenuRecentGeneralSoundFonts"
+                              Header="最近通用樂器音源"
+                              Style="{StaticResource SystemMenuItemStyle}"/>
                     <Separator Style="{StaticResource SystemMenuSeparatorStyle}"/>
                     <MenuItem Header="偏好設定 (Ctrl+P)"
                               Style="{StaticResource SystemMenuItemStyle}"
@@ -662,7 +665,8 @@
                     <DropShadowEffect BlurRadius="14" ShadowDepth="3" Opacity="0.35" Color="Black"/>
                 </Border.Effect>
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBlock Text="✓"
+                    <TextBlock x:Name="TxtToastIcon"
+                               Text="✓"
                                FontSize="13.5"
                                FontWeight="Bold"
                                Foreground="{DynamicResource AccentBlueBrush}"

@@ -87,7 +87,6 @@ namespace WinMusicXmlPlayer
             {
                 UpdateDisplayModeButtonsVisual(ThemeManager.DisplayMode);
                 UpdateWindowStyleButtonsVisual(ThemeManager.WindowStyle);
-                SliderHue.Value = ThemeManager.CurrentHue;
                 SliderReverb.Value = ThemeManager.ReverbAmount;
                 SliderChorus.Value = ThemeManager.ChorusAmount;
                 TxtReverbValue.Text = $"{ThemeManager.ReverbAmount}%";
@@ -138,14 +137,9 @@ namespace WinMusicXmlPlayer
             string hex = $"#{c.R:X2}{c.G:X2}{c.B:X2}";
             int presetIdx = ThemeManager.SelectedPresetIndex;
 
-            // 更新滑桿左方的小型圓形自訂色塊
-            CustomColorSwatchEllipse.Fill = new SolidColorBrush(c);
-            TxtHueDegree.Text = $"{Math.Round(ThemeManager.CurrentHue):0}°";
-
             var activeRingBrush = (Brush)Application.Current.FindResource("TextPrimaryBrush");
-            var subtleRingBrush = (Brush)Application.Current.FindResource("BorderSubtleBrush");
 
-            // 更新 6 個預設小型圓形色塊的選中狀態
+            // 更新 10 個預設小型圓形色塊的選中狀態
             for (int i = 0; i < _presetRingBorders.Count; i++)
             {
                 bool isSelected = (i == presetIdx);
@@ -157,12 +151,6 @@ namespace WinMusicXmlPlayer
             {
                 string presetName = ThemeManager.Presets[presetIdx].Name;
                 TxtActiveColorLabel.Text = $"{presetName} ({hex})";
-                CustomColorOuterRing.BorderBrush = subtleRingBrush;
-            }
-            else
-            {
-                TxtActiveColorLabel.Text = $"自訂主題色彩 ({hex})";
-                CustomColorOuterRing.BorderBrush = activeRingBrush;
             }
         }
 
@@ -173,24 +161,6 @@ namespace WinMusicXmlPlayer
             try
             {
                 ThemeManager.SetPresetColor(presetIndex);
-                SliderHue.Value = ThemeManager.CurrentHue;
-                UpdateDisplayModeButtonsVisual(ThemeManager.DisplayMode);
-                UpdateWindowStyleButtonsVisual(ThemeManager.WindowStyle);
-                UpdateColorVisualIndicators();
-            }
-            finally
-            {
-                _isSyncingUi = false;
-            }
-        }
-
-        private void SliderHue_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-        {
-            if (_isSyncingUi || !IsLoaded) return;
-            _isSyncingUi = true;
-            try
-            {
-                ThemeManager.SetCustomHue(e.NewValue, saveImmediately: false);
                 UpdateDisplayModeButtonsVisual(ThemeManager.DisplayMode);
                 UpdateWindowStyleButtonsVisual(ThemeManager.WindowStyle);
                 UpdateColorVisualIndicators();

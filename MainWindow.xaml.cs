@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -33,8 +34,15 @@ namespace WinMusicXmlPlayer
         private int _loopState;
         private DispatcherTimer? _toastTimer;
         private DispatcherTimer? _audioRecoveryTimer;
+        private DispatcherTimer? _idleTrimTimer;
         private int _audioRecoveryAttempt;
         private DateTime _audioRecoveryDeadlineUtc;
+        private bool _isRenderingLoopHooked;
+        private bool _isClosed;
+        private Task? _startupSoundFontTask;
+        private bool _isRecentSoundFontLoading;
+
+        private static readonly string[] ToastIconPrefixes = { "⏳", "📍", "🔁", "🔊", "🔇", "✓" };
 
         public bool AutoLoadLastScore { get; set; } = true;
 
@@ -70,9 +78,11 @@ namespace WinMusicXmlPlayer
             // 需主動重建輸出，否則程式會一直卡在沒有聲音且無法播放的狀態。
             _audioEngine.AudioOutputLost += OnAudioOutputLost;
             _audioEngine.AudioOutputDeviceChanged += OnAudioOutputDeviceChanged;
+            _audioEngine.AudioSuspendedIdle += OnAudioSuspendedIdle;
             SystemEvents.PowerModeChanged += OnSystemPowerModeChanged;
             SystemEvents.SessionSwitch += OnSystemSessionSwitch;
             Activated += MainWindow_Activated;
+            StateChanged += MainWindow_StateChanged;
 
             Loaded += MainWindow_Loaded;
             Closed += MainWindow_Closed;
@@ -96,61 +106,129 @@ namespace WinMusicXmlPlayer
 
         private void MainWindow_Loaded(object sender, RoutedEventArgs e)
         {
-            // 1. 載入通用樂器 SoundFont (.sf2) 與選用的鋼琴專用 SoundFont (.sf2)
-            string? sf2Path = !string.IsNullOrWhiteSpace(ThemeManager.GeneralSoundFontPath) && File.Exists(ThemeManager.GeneralSoundFontPath)
-                ? ThemeManager.GeneralSoundFontPath
-                : SoundFontManager.FindDefaultSoundFontPath();
+            PianoRoll.VisibleWindowSeconds = ThemeManager.LastVisibleWindowSeconds;
+            RefreshRecentFilesMenu();
+            RefreshRecentSoundFontMenus();
+            SliderMasterVolume.Value = Math.Round(ThemeManager.MasterVolume * 20.0) / 20.0;
+            _audioEngine.MasterVolume = SliderMasterVolume.Value;
+            _audioEngine.ReverbAmount = ThemeManager.ReverbAmount;
+            _audioEngine.ChorusAmount = ThemeManager.ChorusAmount;
+            TxtSoundFontStatus.Text = "正在背景載入音源...";
 
-            string generalError = string.Empty;
-            bool generalLoaded = false;
-
-            if (!string.IsNullOrWhiteSpace(sf2Path))
+            // 讓視窗立即完成首幀繪製，音源與上次樂譜改於背景執行緒非同步載入，大幅縮短啟動等待
+            Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
             {
-                generalLoaded = _audioEngine.LoadSoundFont(sf2Path, out generalError);
-            }
-
-            if (!generalLoaded)
-            {
-                string? fallbackPath = SoundFontManager.FindBuiltInTimGmSoundFontPath();
-                if (string.IsNullOrEmpty(fallbackPath) ||
-                    string.Equals(fallbackPath, sf2Path, StringComparison.OrdinalIgnoreCase))
+                if (!_isClosed)
                 {
-                    fallbackPath = SoundFontManager.FindDefaultSoundFontPath();
+                    _ = InitializeAppResourcesAsync();
+                }
+            }));
+        }
+
+        private async Task InitializeAppResourcesAsync()
+        {
+            string configuredGeneralPath = ThemeManager.GeneralSoundFontPath;
+            string configuredPianoPath = ThemeManager.PianoSoundFontPath;
+            bool shouldAutoLoadScore = AutoLoadLastScore && _currentScore == null;
+            string lastScorePath = shouldAutoLoadScore ? ThemeManager.LastOpenedScorePath : string.Empty;
+            bool expandRepeats = ChkExpandRepeats.IsChecked == true;
+            var perfOptions = ThemeManager.CreatePerformanceOptions();
+
+            // 1. 背景載入通用音源與選用的鋼琴專用音源（Memory-Mapped，幾乎不佔實體 RAM）
+            var sfTask = Task.Run(() =>
+            {
+                string? sf2Path = !string.IsNullOrWhiteSpace(configuredGeneralPath) && File.Exists(configuredGeneralPath)
+                    ? configuredGeneralPath
+                    : SoundFontManager.FindDefaultSoundFontPath();
+
+                string generalError = string.Empty;
+                bool generalLoaded = false;
+                string? fallbackUsedPath = null;
+
+                if (!string.IsNullOrWhiteSpace(sf2Path))
+                {
+                    generalLoaded = _audioEngine.LoadSoundFont(sf2Path, out generalError);
                 }
 
-                if (!string.IsNullOrEmpty(fallbackPath) &&
-                    !string.Equals(fallbackPath, sf2Path, StringComparison.OrdinalIgnoreCase))
+                if (!generalLoaded)
                 {
-                    generalLoaded = _audioEngine.LoadSoundFont(fallbackPath, out _);
-                    if (generalLoaded)
+                    string? fallbackPath = SoundFontManager.FindBuiltInTimGmSoundFontPath();
+                    if (string.IsNullOrEmpty(fallbackPath) ||
+                        string.Equals(fallbackPath, sf2Path, StringComparison.OrdinalIgnoreCase))
                     {
-                        ThemeManager.SetGeneralSoundFontPath(fallbackPath);
-                        ShowToast($"原通用音源無效，已自動改用：{Path.GetFileName(fallbackPath)}");
+                        fallbackPath = SoundFontManager.FindDefaultSoundFontPath();
+                    }
+
+                    if (!string.IsNullOrEmpty(fallbackPath) &&
+                        !string.Equals(fallbackPath, sf2Path, StringComparison.OrdinalIgnoreCase))
+                    {
+                        generalLoaded = _audioEngine.LoadSoundFont(fallbackPath, out _);
+                        if (generalLoaded)
+                        {
+                            fallbackUsedPath = fallbackPath;
+                        }
                     }
                 }
-            }
 
-            if (generalLoaded)
-            {
                 string pianoError = string.Empty;
-                if (!string.IsNullOrWhiteSpace(ThemeManager.PianoSoundFontPath) && File.Exists(ThemeManager.PianoSoundFontPath))
+                bool pianoDisabled = false;
+                if (generalLoaded &&
+                    !string.IsNullOrWhiteSpace(configuredPianoPath) &&
+                    File.Exists(configuredPianoPath))
                 {
-                    if (!_audioEngine.LoadPianoSoundFont(ThemeManager.PianoSoundFontPath, out pianoError))
+                    if (!_audioEngine.LoadPianoSoundFont(configuredPianoPath, out pianoError))
                     {
-                        ThemeManager.SetPianoSoundFontPath(string.Empty);
+                        pianoDisabled = true;
                     }
                 }
 
+                return (generalLoaded, generalError, fallbackUsedPath, pianoError, pianoDisabled);
+            });
+            _startupSoundFontTask = sfTask;
+
+            // 2. 與音源載入平行於背景解析上次開啟的樂譜
+            Task<MusicScore?>? scoreTask = null;
+            if (shouldAutoLoadScore && !string.IsNullOrWhiteSpace(lastScorePath) && File.Exists(lastScorePath))
+            {
+                scoreTask = Task.Run<MusicScore?>(() =>
+                {
+                    try
+                    {
+                        return MusicXmlLoader.LoadFromFile(lastScorePath, expandRepeats, perfOptions);
+                    }
+                    catch
+                    {
+                        return null;
+                    }
+                });
+            }
+
+            var sfResult = await sfTask;
+            if (_isClosed) return;
+
+            if (!string.IsNullOrEmpty(sfResult.fallbackUsedPath))
+            {
+                ThemeManager.SetGeneralSoundFontPath(sfResult.fallbackUsedPath);
+                ShowToast($"原通用音源無效，已自動改用：{Path.GetFileName(sfResult.fallbackUsedPath)}");
+            }
+
+            if (sfResult.pianoDisabled)
+            {
+                ThemeManager.SetPianoSoundFontPath(string.Empty);
+            }
+
+            if (sfResult.generalLoaded)
+            {
                 string status = _audioEngine.GetStatusSummaryText();
-                if (!string.IsNullOrEmpty(generalError))
+                if (!string.IsNullOrEmpty(sfResult.generalError))
                 {
                     status += " ｜ ⚠ 原音源無效，已自動替換";
-                    ShowToast($"通用音源載入失敗：{generalError}");
+                    ShowToast($"通用音源載入失敗：{sfResult.generalError}");
                 }
-                if (!string.IsNullOrEmpty(pianoError))
+                if (!string.IsNullOrEmpty(sfResult.pianoError))
                 {
                     status += " ｜ ⚠ 鋼琴音源已停用";
-                    ShowToast($"鋼琴音源載入失敗：{pianoError}");
+                    ShowToast($"鋼琴音源載入失敗：{sfResult.pianoError}");
                 }
 
                 TxtSoundFontStatus.Text = status;
@@ -158,54 +236,112 @@ namespace WinMusicXmlPlayer
             else
             {
                 TxtSoundFontStatus.Text = "目前音源：尚未載入可用的 .sf2 音源檔（請點擊右上角設定音源）";
-                if (!string.IsNullOrEmpty(generalError))
+                if (!string.IsNullOrEmpty(sfResult.generalError))
                 {
-                    ShowToast($"通用音源載入失敗：{generalError}");
+                    ShowToast($"通用音源載入失敗：{sfResult.generalError}");
                 }
             }
 
             RefreshTrackSoundFontRouting();
+            RefreshAllTrackInstrumentOptions();
 
-            PianoRoll.VisibleWindowSeconds = ThemeManager.LastVisibleWindowSeconds;
-            RefreshRecentFilesMenu();
-            SliderMasterVolume.Value = Math.Round(ThemeManager.MasterVolume * 20.0) / 20.0;
-            _audioEngine.MasterVolume = SliderMasterVolume.Value;
-            _audioEngine.ReverbAmount = ThemeManager.ReverbAmount;
-            _audioEngine.ChorusAmount = ThemeManager.ChorusAmount;
+            if (scoreTask != null)
+            {
+                MusicScore? preloadedScore = await scoreTask;
+                if (!_isClosed && preloadedScore != null && _currentScore == null)
+                {
+                    ApplyLoadedScore(preloadedScore, lastScorePath, expandRepeats, autoPlay: false);
+                }
+            }
 
-            // 2. 自動載入上次成功開啟的樂譜；檔案不存在時維持空白畫面
-            TryAutoLoadLastScore();
-
-            CompositionTarget.Rendering += OnCompositionTargetRendering;
+            ScheduleStartupIdleTrim();
         }
 
-        private void TryAutoLoadLastScore()
+        private void ScheduleStartupIdleTrim()
         {
-            if (!AutoLoadLastScore || _currentScore != null) return;
-
-            string path = ThemeManager.LastOpenedScorePath;
-            if (string.IsNullOrWhiteSpace(path)) return;
-
-            try
+            _idleTrimTimer?.Stop();
+            _idleTrimTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.5) };
+            _idleTrimTimer.Tick += (_, _) =>
             {
-                if (!File.Exists(path)) return;
-                LoadMusicXmlFile(path, autoPlay: false, showErrorDialog: false);
-            }
-            catch
+                _idleTrimTimer?.Stop();
+                _idleTrimTimer = null;
+                if (!_isClosed && !_audioEngine.IsPlaying)
+                {
+                    MemoryOptimizer.TrimIdleMemoryAsync(() => _audioEngine.IsPlaying, force: true);
+                }
+            };
+            _idleTrimTimer.Start();
+        }
+
+        private void MainWindow_StateChanged(object? sender, EventArgs e)
+        {
+            if (WindowState == WindowState.Minimized && !_audioEngine.IsPlaying)
             {
-                // 自動載入失敗時保持空白畫面，避免啟動時彈出錯誤對話框
+                StopRenderingLoop();
+                MemoryOptimizer.TrimIdleMemoryAsync(() => _audioEngine.IsPlaying, force: true);
             }
+        }
+
+        private void OnAudioSuspendedIdle()
+        {
+            if (!_isClosed && !_audioEngine.IsPlaying)
+            {
+                MemoryOptimizer.TrimIdleMemoryAsync(() => _audioEngine.IsPlaying, force: false);
+            }
+        }
+
+        private void EnsureRenderingLoopActive()
+        {
+            if (!_isRenderingLoopHooked && !_isClosed)
+            {
+                CompositionTarget.Rendering += OnCompositionTargetRendering;
+                _isRenderingLoopHooked = true;
+            }
+        }
+
+        private void StopRenderingLoop()
+        {
+            if (_isRenderingLoopHooked)
+            {
+                CompositionTarget.Rendering -= OnCompositionTargetRendering;
+                _isRenderingLoopHooked = false;
+            }
+        }
+
+        private void SyncVisualPositionToTime(double sec)
+        {
+            _lastRenderedTimeSec = sec;
+            PianoRoll.UpdatePlaybackTime(sec);
+            PianoKeyboard.UpdatePlaybackTime(sec);
+            if (!_isSliderDragging)
+            {
+                SliderTimeline.Value = Math.Min(SliderTimeline.Maximum, sec);
+            }
+            _lastDisplayedTenths = (int)(sec * 10.0);
+            TxtCurrentTime.Text = FormatTime(sec);
+            UpdateMusicalTelemetry(sec);
+        }
+
+        private void StartPlayback()
+        {
+            _audioEngine.Play();
+            BtnPlayPause.Content = "⏸ 暫停";
+            EnsureRenderingLoopActive();
         }
 
         private void MainWindow_Closed(object? sender, EventArgs e)
         {
-            CompositionTarget.Rendering -= OnCompositionTargetRendering;
+            _isClosed = true;
+            StopRenderingLoop();
+            StateChanged -= MainWindow_StateChanged;
             SystemEvents.PowerModeChanged -= OnSystemPowerModeChanged;
             SystemEvents.SessionSwitch -= OnSystemSessionSwitch;
             Activated -= MainWindow_Activated;
             _audioEngine.AudioOutputLost -= OnAudioOutputLost;
             _audioEngine.AudioOutputDeviceChanged -= OnAudioOutputDeviceChanged;
+            _audioEngine.AudioSuspendedIdle -= OnAudioSuspendedIdle;
             _audioRecoveryTimer?.Stop();
+            _idleTrimTimer?.Stop();
             ThemeManager.FlushPreferences();
             _audioEngine.Dispose();
         }
@@ -226,7 +362,7 @@ namespace WinMusicXmlPlayer
 
         private void OnSystemPowerModeChanged(object sender, PowerModeChangedEventArgs e)
         {
-            if (e.Mode == PowerModes.Resume)
+            if (e.Mode == PowerModes.Resume && (_audioEngine.IsPlaying || _audioEngine.IsAudioOutputAlive))
             {
                 Dispatcher.BeginInvoke(() => StartAudioRecoverySequence(
                     "系統已從睡眠恢復，正在重新連接音訊裝置...", 800));
@@ -235,7 +371,7 @@ namespace WinMusicXmlPlayer
 
         private void OnSystemSessionSwitch(object sender, SessionSwitchEventArgs e)
         {
-            if (e.Reason == SessionSwitchReason.SessionUnlock)
+            if (e.Reason == SessionSwitchReason.SessionUnlock && (_audioEngine.IsPlaying || _audioEngine.IsAudioOutputAlive))
             {
                 Dispatcher.BeginInvoke(() => StartAudioRecoverySequence(
                     "已解除鎖定，正在檢查音訊裝置...", 500));
@@ -307,60 +443,7 @@ namespace WinMusicXmlPlayer
 
                 bool expandRepeats = ChkExpandRepeats.IsChecked == true;
                 var score = MusicXmlLoader.LoadFromFile(filePath, expandRepeats, ThemeManager.CreatePerformanceOptions());
-
-                _currentScore = score;
-                _currentFilePath = filePath;
-                ThemeManager.SetLastOpenedDirectory(Path.GetDirectoryName(Path.GetFullPath(filePath)));
-                ThemeManager.AddRecentFile(filePath);
-                if (AutoLoadLastScore)
-                    ThemeManager.SetLastOpenedScorePath(filePath);
-                RefreshRecentFilesMenu();
-
-                TxtScoreTitle.Text = string.IsNullOrWhiteSpace(score.Composer)
-                    ? score.Title
-                    : $"{score.Title} — {score.Composer}";
-
-                string repeatTag = score.HasRepeats ? (expandRepeats ? "已展開反覆記號" : "不展開反覆") : "無反覆記號";
-                TxtScoreSubtitle.Text = $"共 {score.Tracks.Count} 個可操作聲部 · {score.Measures.Count} 小節 · 總音符 {score.Notes.Count} · {repeatTag}";
-
-                TxtTrackSummary.Text = $"共 {score.Tracks.Count} 個聲部軌道（可獨立靜音、獨奏、換樂器、調音量）";
-
-                foreach (var track in score.Tracks)
-                {
-                    InitializeTrackInstrumentOptions(track);
-                }
-                RefreshAllTrackInstrumentOptions();
-
-                TracksItemsControl.ItemsSource = null;
-                TracksItemsControl.ItemsSource = score.Tracks;
-
-                // 有聲部時才顯示「重置」按鈕，無聲部時隱藏
-                BtnResetTracks.Visibility = score.Tracks.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-
-                PianoRoll.SetScore(score);
-                PianoKeyboard.SetScore(score);
-                _audioEngine.LoadScore(score);
-                RefreshTrackSoundFontRouting();
-                _loopState = 0;
-                UpdateLoopButtonUi();
-                _lastRenderedTimeSec = -1.0;
-                _lastDisplayedTenths = -1;
-                _lastTelemetryTimelineIdx = -1;
-                _lastTelemetrySpeedBpm = -1;
-                _metersActive = true;
-
-                SliderTimeline.Maximum = Math.Max(1.0, score.TotalDurationSeconds);
-                SliderTimeline.Value = 0.0;
-                TxtCurrentTime.Text = "00:00.0";
-                TxtTotalTime.Text = FormatTime(score.TotalDurationSeconds);
-
-                UpdateMusicalTelemetry(0.0);
-
-                if (autoPlay)
-                {
-                    _audioEngine.Play();
-                    BtnPlayPause.Content = "⏸ 暫停";
-                }
+                ApplyLoadedScore(score, filePath, expandRepeats, autoPlay);
             }
             catch (Exception ex)
             {
@@ -371,16 +454,79 @@ namespace WinMusicXmlPlayer
             }
         }
 
+        private void ApplyLoadedScore(MusicScore score, string filePath, bool expandRepeats, bool autoPlay)
+        {
+            _currentScore = score;
+            _currentFilePath = filePath;
+            ThemeManager.SetLastOpenedDirectory(Path.GetDirectoryName(Path.GetFullPath(filePath)));
+            ThemeManager.AddRecentFile(filePath);
+            if (AutoLoadLastScore)
+                ThemeManager.SetLastOpenedScorePath(filePath);
+            RefreshRecentFilesMenu();
+
+            TxtScoreTitle.Text = string.IsNullOrWhiteSpace(score.Composer)
+                ? score.Title
+                : $"{score.Title} — {score.Composer}";
+
+            string repeatTag = score.HasRepeats ? (expandRepeats ? "已展開反覆記號" : "不展開反覆") : "無反覆記號";
+            TxtScoreSubtitle.Text = $"共 {score.Tracks.Count} 個可操作聲部 · {score.Measures.Count} 小節 · 總音符 {score.Notes.Count} · {repeatTag}";
+
+            TxtTrackSummary.Text = $"共 {score.Tracks.Count} 個聲部軌道（可獨立靜音、獨奏、換樂器、調音量）";
+
+            foreach (var track in score.Tracks)
+            {
+                InitializeTrackInstrumentOptions(track);
+            }
+            RefreshAllTrackInstrumentOptions();
+
+            TracksItemsControl.ItemsSource = null;
+            TracksItemsControl.ItemsSource = score.Tracks;
+
+            // 有聲部時才顯示「重置」按鈕，無聲部時隱藏
+            BtnResetTracks.Visibility = score.Tracks.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+
+            PianoRoll.SetScore(score);
+            PianoKeyboard.SetScore(score);
+            _audioEngine.LoadScore(score);
+            RefreshTrackSoundFontRouting();
+            _loopState = 0;
+            UpdateLoopButtonUi();
+            _lastRenderedTimeSec = 0.0;
+            _lastDisplayedTenths = 0;
+            _lastTelemetryTimelineIdx = -1;
+            _lastTelemetrySpeedBpm = -1;
+            _metersActive = false;
+
+            SliderTimeline.Maximum = Math.Max(1.0, score.TotalDurationSeconds);
+            SliderTimeline.Value = 0.0;
+            TxtCurrentTime.Text = "00:00.0";
+            TxtTotalTime.Text = FormatTime(score.TotalDurationSeconds);
+
+            UpdateMusicalTelemetry(0.0);
+
+            if (autoPlay)
+            {
+                StartPlayback();
+            }
+        }
+
         private void OnCompositionTargetRendering(object? sender, EventArgs e)
         {
-            if (_currentScore == null) return;
+            if (_currentScore == null)
+            {
+                StopRenderingLoop();
+                return;
+            }
 
             double curSec = _audioEngine.GetVisualTimeSeconds(ThemeManager.VisualSyncOffsetMs / 1000.0);
             bool isPlaying = _audioEngine.IsPlaying;
             bool timeChanged = Math.Abs(curSec - _lastRenderedTimeSec) > 0.0005;
 
             if (!isPlaying && !timeChanged && !_metersActive)
+            {
+                StopRenderingLoop();
                 return;
+            }
 
             if (timeChanged)
             {
@@ -404,6 +550,10 @@ namespace WinMusicXmlPlayer
             }
 
             _metersActive = UpdateTrackActivityMeters(curSec);
+            if (!isPlaying && !_metersActive)
+            {
+                StopRenderingLoop();
+            }
         }
 
         private void UpdateMusicalTelemetry(double curSec)
@@ -511,8 +661,7 @@ namespace WinMusicXmlPlayer
         {
             if (_wasPlayingBeforeScrub)
             {
-                _audioEngine.Play();
-                BtnPlayPause.Content = "⏸ 暫停";
+                StartPlayback();
             }
         }
 
@@ -692,6 +841,7 @@ namespace WinMusicXmlPlayer
                     {
                         e.Handled = true;
                         _audioEngine.Seek(0.0);
+                        SyncVisualPositionToTime(0.0);
                         return;
                     }
                     if (key == Key.M)
@@ -736,7 +886,7 @@ namespace WinMusicXmlPlayer
                 bool ok = await System.Threading.Tasks.Task.Run(() => _audioEngine.ExportToWavFile(outPath, out err));
                 if (ok)
                 {
-                    ShowToast($"✓ 已匯出 WAV：{Path.GetFileName(outPath)}");
+                    ShowToast($"已匯出 WAV：{Path.GetFileName(outPath)}");
                 }
                 else
                 {
@@ -758,6 +908,8 @@ namespace WinMusicXmlPlayer
                 Owner = this
             };
             dlg.ShowDialog();
+            RefreshRecentSoundFontMenus();
+            MemoryOptimizer.TrimIdleMemoryAsync(() => _audioEngine.IsPlaying, force: false);
         }
 
         private void MenuPreferences_Click(object sender, RoutedEventArgs e)
@@ -821,8 +973,7 @@ namespace WinMusicXmlPlayer
 
             if (wasPlaying)
             {
-                _audioEngine.Play();
-                BtnPlayPause.Content = "⏸ 暫停";
+                StartPlayback();
             }
 
             ShowToast("演奏設定已套用");
@@ -836,6 +987,7 @@ namespace WinMusicXmlPlayer
                 Owner = this
             };
             dlg.ShowDialog();
+            MemoryOptimizer.TrimIdleMemoryAsync(() => _audioEngine.IsPlaying, force: false);
         }
 
         private void BtnOpenFile_Click(object sender, RoutedEventArgs e)
@@ -934,6 +1086,126 @@ namespace WinMusicXmlPlayer
                 ShowToast("已清除最近開啟紀錄（含自動載入）");
             };
             MenuRecentFiles.Items.Add(clearItem);
+        }
+
+        // ==================== 最近音源選單 ====================
+
+        private void RefreshRecentSoundFontMenus()
+        {
+            if (MenuRecentPianoSoundFonts == null || MenuRecentGeneralSoundFonts == null) return;
+
+            PopulateRecentSoundFontMenu(MenuRecentPianoSoundFonts, SoundFontSlot.Piano, "鋼琴專用音源");
+            PopulateRecentSoundFontMenu(MenuRecentGeneralSoundFonts, SoundFontSlot.General, "通用樂器音源");
+        }
+
+        private void PopulateRecentSoundFontMenu(MenuItem menu, SoundFontSlot slot, string categoryName)
+        {
+            menu.Items.Clear();
+            var menuStyle = TryFindResource("SystemMenuItemStyle") as Style;
+            var sepStyle = TryFindResource("SystemMenuSeparatorStyle") as Style;
+            var recents = ThemeManager.GetRecentSoundFonts(slot);
+
+            if (recents.Count == 0)
+            {
+                menu.Items.Add(new MenuItem
+                {
+                    Header = "(尚無最近音源)",
+                    IsEnabled = false,
+                    Style = menuStyle
+                });
+                return;
+            }
+
+            foreach (string path in recents)
+            {
+                string capturedPath = path;
+                var item = new MenuItem
+                {
+                    Header = Path.GetFileName(capturedPath),
+                    ToolTip = capturedPath,
+                    Style = menuStyle
+                };
+                item.Click += async (_, _) =>
+                {
+                    CloseOtherTopMenus(null);
+                    await LoadRecentSoundFontFromMenuAsync(slot, capturedPath);
+                };
+                menu.Items.Add(item);
+            }
+
+            menu.Items.Add(new Separator { Style = sepStyle });
+            var clearItem = new MenuItem
+            {
+                Header = "清除此分類紀錄",
+                ToolTip = $"清除{categoryName}的最近使用紀錄",
+                Style = menuStyle
+            };
+            clearItem.Click += (_, _) =>
+            {
+                CloseOtherTopMenus(null);
+                ThemeManager.ClearRecentSoundFonts(slot);
+                RefreshRecentSoundFontMenus();
+                ShowToast($"已清除{categoryName}紀錄");
+            };
+            menu.Items.Add(clearItem);
+        }
+
+        private async Task LoadRecentSoundFontFromMenuAsync(SoundFontSlot slot, string path)
+        {
+            if (_isRecentSoundFontLoading) return;
+
+            if (!File.Exists(path))
+            {
+                ThemeManager.RemoveRecentSoundFont(slot, path);
+                RefreshRecentSoundFontMenus();
+                ShowToast("音源檔案已不存在或已被移動");
+                return;
+            }
+
+            _isRecentSoundFontLoading = true;
+            try
+            {
+                string label = slot == SoundFontSlot.Piano ? "鋼琴專用音源" : "通用樂器音源";
+                ShowToast($"⏳ 正在載入{label}：{Path.GetFileName(path)}");
+
+                string err = string.Empty;
+                bool ok;
+                if (slot == SoundFontSlot.Piano)
+                {
+                    ok = await Task.Run(() => _audioEngine.LoadPianoSoundFont(path, out err));
+                }
+                else
+                {
+                    ok = await Task.Run(() => _audioEngine.LoadSoundFont(path, out err));
+                }
+
+                if (ok)
+                {
+                    if (slot == SoundFontSlot.Piano)
+                    {
+                        ThemeManager.SetPianoSoundFontPath(path);
+                    }
+                    else
+                    {
+                        ThemeManager.SetGeneralSoundFontPath(path);
+                    }
+
+                    ThemeManager.AddRecentSoundFont(slot, path);
+                    TxtSoundFontStatus.Text = _audioEngine.GetStatusSummaryText();
+                    RefreshTrackSoundFontRouting();
+                    RefreshAllTrackInstrumentOptions();
+                    RefreshRecentSoundFontMenus();
+                    ShowToast($"已切換{label}：{Path.GetFileName(path)}");
+                }
+                else
+                {
+                    MessageBox.Show(this, err, $"{label}載入失敗", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+            }
+            finally
+            {
+                _isRecentSoundFontLoading = false;
+            }
         }
 
         // ==================== 88 鍵鋼琴鍵盤點擊試聽與 A-B 區間循環 ====================
@@ -1297,6 +1569,18 @@ namespace WinMusicXmlPlayer
 
         public void ShowToast(string message)
         {
+            string icon = "✓";
+            foreach (string prefix in ToastIconPrefixes)
+            {
+                if (message.StartsWith(prefix, StringComparison.Ordinal))
+                {
+                    icon = prefix;
+                    message = message.Substring(prefix.Length).TrimStart();
+                    break;
+                }
+            }
+
+            TxtToastIcon.Text = icon;
             TxtToastMessage.Text = message;
             ToastBanner.Visibility = Visibility.Visible;
 
@@ -1335,7 +1619,7 @@ namespace WinMusicXmlPlayer
             TogglePlayPause();
         }
 
-        private void TogglePlayPause()
+        private async void TogglePlayPause()
         {
             if (_currentScore == null)
             {
@@ -1352,8 +1636,12 @@ namespace WinMusicXmlPlayer
             }
             else
             {
-                _audioEngine.Play();
-                BtnPlayPause.Content = "⏸ 暫停";
+                if (_startupSoundFontTask is { IsCompleted: false } sfTask)
+                {
+                    await sfTask;
+                    if (_isClosed || _currentScore == null) return;
+                }
+                StartPlayback();
             }
         }
 
@@ -1361,18 +1649,19 @@ namespace WinMusicXmlPlayer
         {
             _audioEngine.Stop();
             BtnPlayPause.Content = "▶ 播放";
-            PianoRoll.UpdatePlaybackTime(0);
-            PianoKeyboard.UpdatePlaybackTime(0);
+            SyncVisualPositionToTime(0.0);
         }
 
         private void BtnStepBack_Click(object sender, RoutedEventArgs e)
         {
             _audioEngine.Seek(_audioEngine.CurrentTimeSeconds - 5.0);
+            SyncVisualPositionToTime(_audioEngine.CurrentTimeSeconds);
         }
 
         private void BtnStepForward_Click(object sender, RoutedEventArgs e)
         {
             _audioEngine.Seek(_audioEngine.CurrentTimeSeconds + 5.0);
+            SyncVisualPositionToTime(_audioEngine.CurrentTimeSeconds);
         }
 
         private void SliderTimeline_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -1386,6 +1675,7 @@ namespace WinMusicXmlPlayer
             {
                 _isSliderDragging = false;
                 _audioEngine.Seek(SliderTimeline.Value);
+                SyncVisualPositionToTime(_audioEngine.CurrentTimeSeconds);
             }
         }
 
@@ -1394,8 +1684,7 @@ namespace WinMusicXmlPlayer
             if (_isSliderDragging)
             {
                 _audioEngine.Seek(e.NewValue);
-                PianoRoll.UpdatePlaybackTime(e.NewValue);
-                PianoKeyboard.UpdatePlaybackTime(e.NewValue);
+                SyncVisualPositionToTime(e.NewValue);
             }
         }
 
@@ -1508,12 +1797,15 @@ namespace WinMusicXmlPlayer
                 {
                     if (_audioEngine.LoadSoundFont(f, out string err))
                     {
+                        ThemeManager.SetGeneralSoundFontPath(f);
+                        ThemeManager.AddRecentSoundFont(SoundFontSlot.General, f);
                         TxtSoundFontStatus.Text = _audioEngine.GetStatusSummaryText();
-            _audioEngine.ReverbAmount = ThemeManager.ReverbAmount;
-            _audioEngine.ChorusAmount = ThemeManager.ChorusAmount;
+                        _audioEngine.ReverbAmount = ThemeManager.ReverbAmount;
+                        _audioEngine.ChorusAmount = ThemeManager.ChorusAmount;
 
-            RefreshTrackSoundFontRouting();
+                        RefreshTrackSoundFontRouting();
                         RefreshAllTrackInstrumentOptions();
+                        RefreshRecentSoundFontMenus();
                     }
                     else
                     {

@@ -60,12 +60,16 @@
                     Padding="14,12"
                     Margin="0,0,0,10">
                 <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
 
-                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,10,0">
+                    <StackPanel Grid.Row="0" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,10,0">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="🎹 鋼琴專用音源 (.sf2)"
                                        FontSize="13.5"
@@ -91,7 +95,7 @@
                                    Margin="0,5,0,0"/>
                     </StackPanel>
 
-                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                         <Button Content="選擇鋼琴 .sf2..."
                                 Style="{StaticResource PlayButtonStyle}"
                                 Padding="11,5"
@@ -106,6 +110,46 @@
                                 Click="BtnClearPianoSf_Click"
                                 ToolTip="停用獨立鋼琴音源，讓鋼琴聲部回歸使用通用音源"/>
                     </StackPanel>
+
+                    <!-- 最近使用過的鋼琴專用音源：可快速切換或刪除 -->
+                    <Grid Grid.Row="1" Grid.ColumnSpan="2" Margin="0,9,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0"
+                                   Text="最近音源："
+                                   FontSize="11.5"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   VerticalAlignment="Center"/>
+                        <ComboBox x:Name="CmbRecentPianoSf"
+                                  Grid.Column="1"
+                                  Height="26"
+                                  FontSize="11.5"
+                                  Margin="6,0,6,0"
+                                  VerticalContentAlignment="Center"
+                                  SelectionChanged="CmbRecentPianoSf_SelectionChanged"
+                                  ToolTip="選擇最近使用過的鋼琴專用音源即可立即切換"/>
+                        <Button x:Name="BtnDeleteRecentPianoSf"
+                                Grid.Column="2"
+                                Content="✕ 刪除"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                Padding="8,3"
+                                FontSize="11"
+                                Margin="0,0,6,0"
+                                Click="BtnDeleteRecentPianoSf_Click"
+                                ToolTip="從最近音源清單移除選取的項目"/>
+                        <Button x:Name="BtnClearRecentPianoSf"
+                                Grid.Column="3"
+                                Content="清除全部"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                Padding="8,3"
+                                FontSize="11"
+                                Click="BtnClearRecentPianoSf_Click"
+                                ToolTip="清除全部鋼琴專用音源紀錄"/>
+                    </Grid>
                 </Grid>
             </Border>
 
@@ -116,12 +160,16 @@
                     CornerRadius="{DynamicResource CardCornerRadius}"
                     Padding="14,12">
                 <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
 
-                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,10,0">
+                    <StackPanel Grid.Row="0" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,10,0">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="🎻 通用樂器音源 (.sf2)"
                                        FontSize="13.5"
@@ -147,7 +195,7 @@
                                    Margin="0,5,0,0"/>
                     </StackPanel>
 
-                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                         <Button Content="選擇通用 .sf2..."
                                 Style="{StaticResource ToolbarButtonStyle}"
                                 Padding="11,5"
@@ -161,6 +209,46 @@
                                 Click="BtnResetGeneralSf_Click"
                                 ToolTip="還原為內建的 TimGM6mb.sf2 通用音源"/>
                     </StackPanel>
+
+                    <!-- 最近使用過的通用樂器音源：可快速切換或刪除 -->
+                    <Grid Grid.Row="1" Grid.ColumnSpan="2" Margin="0,9,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0"
+                                   Text="最近音源："
+                                   FontSize="11.5"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   VerticalAlignment="Center"/>
+                        <ComboBox x:Name="CmbRecentGeneralSf"
+                                  Grid.Column="1"
+                                  Height="26"
+                                  FontSize="11.5"
+                                  Margin="6,0,6,0"
+                                  VerticalContentAlignment="Center"
+                                  SelectionChanged="CmbRecentGeneralSf_SelectionChanged"
+                                  ToolTip="選擇最近使用過的通用樂器音源即可立即切換"/>
+                        <Button x:Name="BtnDeleteRecentGeneralSf"
+                                Grid.Column="2"
+                                Content="✕ 刪除"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                Padding="8,3"
+                                FontSize="11"
+                                Margin="0,0,6,0"
+                                Click="BtnDeleteRecentGeneralSf_Click"
+                                ToolTip="從最近音源清單移除選取的項目"/>
+                        <Button x:Name="BtnClearRecentGeneralSf"
+                                Grid.Column="3"
+                                Content="清除全部"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                Padding="8,3"
+                                FontSize="11"
+                                Click="BtnClearRecentGeneralSf_Click"
+                                ToolTip="清除全部通用樂器音源紀錄"/>
+                    </Grid>
                 </Grid>
             </Border>
         </StackPanel>

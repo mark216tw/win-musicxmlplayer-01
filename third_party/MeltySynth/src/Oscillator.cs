@@ -2,7 +2,7 @@
 
 namespace MeltySynth
 {
-    internal sealed class Oscillator
+    internal sealed unsafe class Oscillator
     {
         // In this class, fixed-point numbers are used for speed-up.
         // A fixed-point number is expressed by Int64, whose lower 24 bits represent the fraction part,
@@ -15,7 +15,7 @@ namespace MeltySynth
 
         private readonly Synthesizer synthesizer;
 
-        private short[]? data;
+        private SoundFontSampleData? data;
         private LoopMode loopMode;
         private int sampleRate;
         private int start;
@@ -37,7 +37,7 @@ namespace MeltySynth
             this.synthesizer = synthesizer;
         }
 
-        public void Start(short[] data, LoopMode loopMode, int sampleRate, int start, int end, int startLoop, int endLoop, int rootKey, int coarseTune, int fineTune, int scaleTuning)
+        public void Start(SoundFontSampleData data, LoopMode loopMode, int sampleRate, int start, int end, int startLoop, int endLoop, int rootKey, int coarseTune, int fineTune, int scaleTuning)
         {
             this.data = data;
             this.loopMode = loopMode;
@@ -95,6 +95,51 @@ namespace MeltySynth
 
         private bool FillBlock_NoLoop(float[] block, long pitchRatio_fp)
         {
+            var sampleData = data;
+            if (sampleData == null)
+            {
+                Array.Clear(block, 0, block.Length);
+                return false;
+            }
+
+            short* mappedPtr = sampleData.MappedSamplesPointer;
+            if (mappedPtr != null)
+            {
+                for (var t = 0; t < block.Length; t++)
+                {
+                    var index = position_fp >> fracBits;
+
+                    if (index >= end)
+                    {
+                        if (t > 0)
+                        {
+                            Array.Clear(block, t, block.Length - t);
+                            return true;
+                        }
+                        else
+                        {
+                            return false;
+                        }
+                    }
+
+                    var x1 = mappedPtr[index];
+                    var x2 = mappedPtr[index + 1];
+                    var a_fp = position_fp & (fracUnit - 1);
+                    block[t] = fpToSample * (((long)x1 << fracBits) + a_fp * (x2 - x1));
+
+                    position_fp += pitchRatio_fp;
+                }
+
+                return true;
+            }
+
+            var managed = sampleData.ManagedSamples;
+            if (managed == null)
+            {
+                Array.Clear(block, 0, block.Length);
+                return false;
+            }
+
             for (var t = 0; t < block.Length; t++)
             {
                 var index = position_fp >> fracBits;
@@ -112,8 +157,8 @@ namespace MeltySynth
                     }
                 }
 
-                var x1 = data![index];
-                var x2 = data![index + 1];
+                var x1 = managed[index];
+                var x2 = managed[index + 1];
                 var a_fp = position_fp & (fracUnit - 1);
                 block[t] = fpToSample * (((long)x1 << fracBits) + a_fp * (x2 - x1));
 
@@ -125,10 +170,52 @@ namespace MeltySynth
 
         private bool FillBlock_Continuous(float[] block, long pitchRatio_fp)
         {
-            var endLoop_fp = (long)endLoop << fracBits;
+            var sampleData = data;
+            if (sampleData == null)
+            {
+                Array.Clear(block, 0, block.Length);
+                return false;
+            }
 
+            var endLoop_fp = (long)endLoop << fracBits;
             var loopLength = (long)(endLoop - startLoop);
             var loopLength_fp = loopLength << fracBits;
+
+            short* mappedPtr = sampleData.MappedSamplesPointer;
+            if (mappedPtr != null)
+            {
+                for (var t = 0; t < block.Length; t++)
+                {
+                    if (position_fp >= endLoop_fp)
+                    {
+                        position_fp -= loopLength_fp;
+                    }
+
+                    var index1 = position_fp >> fracBits;
+                    var index2 = index1 + 1;
+
+                    if (index2 >= endLoop)
+                    {
+                        index2 -= loopLength;
+                    }
+
+                    var x1 = mappedPtr[index1];
+                    var x2 = mappedPtr[index2];
+                    var a_fp = position_fp & (fracUnit - 1);
+                    block[t] = fpToSample * (((long)x1 << fracBits) + a_fp * (x2 - x1));
+
+                    position_fp += pitchRatio_fp;
+                }
+
+                return true;
+            }
+
+            var managed = sampleData.ManagedSamples;
+            if (managed == null)
+            {
+                Array.Clear(block, 0, block.Length);
+                return false;
+            }
 
             for (var t = 0; t < block.Length; t++)
             {
@@ -145,8 +232,8 @@ namespace MeltySynth
                     index2 -= loopLength;
                 }
 
-                var x1 = data![index1];
-                var x2 = data![index2];
+                var x1 = managed[index1];
+                var x2 = managed[index2];
                 var a_fp = position_fp & (fracUnit - 1);
                 block[t] = fpToSample * (((long)x1 << fracBits) + a_fp * (x2 - x1));
 

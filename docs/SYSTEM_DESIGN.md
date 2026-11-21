@@ -78,11 +78,11 @@ $$t_{\text{visualEnd}} = t_{\text{start}} + \max(0.025\text{s}, \, D_{\text{note
 
 ## 4. 動態主題、HSL 色彩空間與原生 DWM 設計 (`Services/ThemeManager.cs`)
 
-### 4.1 單一 Hue 彩色滑桿與預設色塊雙向連動
+### 4.1 10 款精選主題色塊
 - 主題色彩全面採用 **HSL (Hue, Saturation, Lightness)** 色彩空間建模：
-  - 使用者可透過 6 個預設色塊（對應特定 Hue 角度：`199°`、`14°`、`42°`、`156°`、`262°`、`332°`）或 `0°–360°` 滑桿選擇任意色相角 $H \in [0, 360]$。
+  - 使用者可透過 10 個均勻調校的預設色塊選擇主題色，色相角度依序為：`199°`、`229°`、`262°`、`298°`、`332°`、`14°`、`45°`、`88°`、`128°`、`162°`。
   - 主強調色計算公式：$\text{ColorFromHue}(H) = \text{HSL}(H, \, S=0.88, \, L=0.58)$。
-  - 按鈕背景與按壓態衍生色自動依 $H$ 計算不同明度（$L=0.44$、$L=0.50$、$L=0.36$），確保白色文字在任何自訂色相下均具備良好對比度。
+  - 按鈕背景與按壓態衍生色自動依 $H$ 計算不同明度（$L=0.44$、$L=0.50$、$L=0.36$），確保白色文字在任何預設色相下均具備良好對比度。
 
 ### 4.2 視窗樣式主題與 Windows DWM 整合
 系統提供四種 `WindowStyleTheme`，同時控制 WPF 內部控制項資源與 Windows 11 原生 DWM 視窗屬性：
@@ -90,3 +90,18 @@ $$t_{\text{visualEnd}} = t_{\text{start}} + \max(0.025\text{s}, \, D_{\text{note
 2. **`StudioSharp`（專業俐落）**：`CardCornerRadius = 2`、DWM 直角邊框 (`DWMWCP_DONOTROUND = 1`)、高對比純黑/純白工作室配色。
 3. **`ThemeTinted`（主題炫彩）**：`CardCornerRadius = 12`、將目前主題色相 $H$ 以低飽和度混入所有面板背景（例如深色模式 `HSL(H, 0.38, 0.09 ~ 0.16)`）並將原生視窗外框 (`DWMWA_BORDER_COLOR`) 染為目前主題色。
 4. **`ConcertHall`（古典音樂廳）**：`CardCornerRadius = 6`、DWM 小圓角 (`DWMWCP_ROUNDSMALL = 3`)、黑檀木（深色）/ 羊皮紙（淺色）古典暖色調。
+
+---
+
+## 5. 記憶體映射音源與閒置資源管理 (`third_party/MeltySynth/src/SoundFontSampleData.cs`、`Services/MemoryOptimizer.cs`)
+
+### 5.1 唯讀記憶體映射取樣資料 (Memory-Mapped Sample Data)
+SoundFont 的 `smpl` 區塊可能高達數百 MB。為避免載入時將整份取樣資料複製到 managed heap，`SoundFontSampleData` 以 `MemoryMappedFile` 建立唯讀檢視，並透過 `AcquirePointer` 取得基底指標：
+- `Oscillator.FillBlock_*` 以 `unsafe` 指標直接內插讀取樣本，僅在無法映射時才回退至 managed `short[]`。
+- `SoundFont` 以原子引用計數管理生命週期；切換音源、離線 WAV 匯出與背景預覽可安全共用同一份映射，最後一個引用釋放時才關閉檔案映射。
+- 啟動時先完成 UI 繪製，再於背景執行緒平行載入音源與上次樂譜，縮短首次可互動時間。
+
+### 5.2 閒置記憶體整理與音訊輸出休眠
+- `MemoryOptimizer.TrimIdleMemoryAsync()` 以冷卻時間與 `Interlocked` 防止重入，在啟動完成、視窗最小化、設定視窗關閉或音訊輸出閒置時，於 `ThreadPool` 執行 LOH 壓縮與 `SetProcessWorkingSetSizeEx` 工作集修剪；每次執行前後都會檢查是否正在播放，播放期間不介入。
+- `AudioEngine` 在暫停、無作用中音符與預覽鍵、且連續 2 秒輸出峰值低於 `1e-5` 時，於背景安全處置 WASAPI 輸出；下一次 `Play()` 或 `PreviewNoteOn()` 會重新初始化裝置。
+- `MainWindow` 僅在播放、時間變動或聲部動態表仍有活動時保留 `CompositionTarget.Rendering` 訂閱，其餘時間解除，使閒置 CPU 與記憶體佔用趨近於零。

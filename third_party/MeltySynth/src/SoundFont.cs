@@ -3,20 +3,22 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
+using System.Threading;
 
 namespace MeltySynth
 {
     /// <summary>
     /// Reperesents a SoundFont.
     /// </summary>
-    public sealed class SoundFont
+    public sealed class SoundFont : IDisposable
     {
-        private SoundFontInfo info;
+        private SoundFontInfo info = null!;
         private int bitsPerSample;
-        private short[] waveData;
-        private SampleHeader[] sampleHeaders;
-        private Preset[] presets;
-        private Instrument[] instruments;
+        private SoundFontSampleData sampleData = null!;
+        private SampleHeader[] sampleHeaders = null!;
+        private Preset[] presets = null!;
+        private Instrument[] instruments = null!;
+        private int refCount = 1;
 
         /// <summary>
         /// Loads a SoundFont from the stream.
@@ -31,18 +33,17 @@ namespace MeltySynth
                 throw new ArgumentNullException(nameof(stream));
             }
 
-            Load(stream);
+            Load(stream, memoryMapFileStream: null);
 
-            // Workaround for nullable warnings in .NET Standard 2.1.
             Debug.Assert(info != null);
-            Debug.Assert(waveData != null);
+            Debug.Assert(sampleData != null);
             Debug.Assert(sampleHeaders != null);
             Debug.Assert(presets != null);
             Debug.Assert(instruments != null);
         }
 
         /// <summary>
-        /// Loads a SoundFont from the file.
+        /// Loads a SoundFont from the file using memory-mapped sample data for fast startup and minimal RAM usage.
         /// </summary>
         /// <param name="path">
         /// The SoundFont file name and path.
@@ -54,20 +55,26 @@ namespace MeltySynth
                 throw new ArgumentNullException(nameof(path));
             }
 
-            using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read))
+            var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, FileOptions.SequentialScan);
+            try
             {
-                Load(stream);
+                Load(stream, memoryMapFileStream: stream);
+            }
+            catch
+            {
+                try { sampleData?.Dispose(); } catch { }
+                try { stream.Dispose(); } catch { }
+                throw;
             }
 
-            // Workaround for nullable warnings in .NET Standard 2.1.
             Debug.Assert(info != null);
-            Debug.Assert(waveData != null);
+            Debug.Assert(sampleData != null);
             Debug.Assert(sampleHeaders != null);
             Debug.Assert(presets != null);
             Debug.Assert(instruments != null);
         }
 
-        private void Load(Stream stream)
+        private void Load(Stream stream, FileStream? memoryMapFileStream)
         {
             using (var reader = new BinaryReader(stream, Encoding.ASCII, true))
             {
@@ -87,14 +94,18 @@ namespace MeltySynth
 
                 info = new SoundFontInfo(reader);
 
-                var sampleData = new SoundFontSampleData(reader);
+                sampleData = new SoundFontSampleData(reader, deferMemoryMap: memoryMapFileStream != null);
                 bitsPerSample = sampleData.BitsPerSample;
-                waveData = sampleData.Samples;
 
                 var parameters = new SoundFontParameters(reader);
                 sampleHeaders = parameters.SampleHeaders;
                 presets = parameters.Presets;
                 instruments = parameters.Instruments;
+            }
+
+            if (memoryMapFileStream != null)
+            {
+                sampleData.AttachMemoryMappedFile(memoryMapFileStream);
             }
 
             CheckSamples();
@@ -114,7 +125,7 @@ namespace MeltySynth
 
         private void CheckSamples()
         {
-            var sampleCount = waveData.Length - 4; // This offset is to ensure that out of range access is safe.
+            var sampleCount = sampleData.Length - 4; // This offset is to ensure that out of range access is safe.
 
             foreach (var sample in sampleHeaders)
             {
@@ -139,7 +150,7 @@ namespace MeltySynth
 
         private void CheckRegions()
         {
-            var sampleCount = waveData.Length - 4; // This offset is to ensure that out of range access is safe.
+            var sampleCount = sampleData.Length - 4; // This offset is to ensure that out of range access is safe.
 
             foreach (var instrument in instruments)
             {
@@ -175,6 +186,36 @@ namespace MeltySynth
             }
         }
 
+        internal bool TryAddRef()
+        {
+            while (true)
+            {
+                int current = Volatile.Read(ref refCount);
+                if (current <= 0)
+                    return false;
+                if (Interlocked.CompareExchange(ref refCount, current + 1, current) == current)
+                    return true;
+            }
+        }
+
+        public void Dispose()
+        {
+            while (true)
+            {
+                int current = Volatile.Read(ref refCount);
+                if (current <= 0)
+                    return;
+                if (Interlocked.CompareExchange(ref refCount, current - 1, current) == current)
+                {
+                    if (current == 1)
+                    {
+                        sampleData?.Dispose();
+                    }
+                    return;
+                }
+            }
+        }
+
         /// <summary>
         /// The information of the SoundFont.
         /// </summary>
@@ -191,11 +232,7 @@ namespace MeltySynth
         /// <summary>
         /// The sample data.
         /// </summary>
-        /// <remarks>
-        /// This single array contains all the waveform data in the SoundFont.
-        /// An instance of <see cref="SampleHeader"/> indicates a range of the array corresponding to a sample.
-        /// </remarks>
-        public ReadOnlySpan<short> WaveData => waveData;
+        public ReadOnlySpan<short> WaveData => sampleData.AsSpan();
 
         /// <summary>
         /// The samples of the SoundFont.
@@ -212,8 +249,8 @@ namespace MeltySynth
         /// </summary>
         public IReadOnlyList<Instrument> Instruments => instruments;
 
-        // Internally exposes the raw arrays for fast enumeration.
-        internal short[] WaveDataArray => waveData;
+        // Internally exposes the raw arrays/buffers for fast enumeration.
+        internal SoundFontSampleData SampleData => sampleData;
         internal SampleHeader[] SampleHeaderArray => sampleHeaders;
         internal Preset[] PresetArray => presets;
         internal Instrument[] InstrumentArray => instruments;

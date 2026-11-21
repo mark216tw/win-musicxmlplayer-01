@@ -10,76 +10,6 @@
         Background="{DynamicResource BgPrimaryBrush}"
         Foreground="{DynamicResource TextPrimaryBrush}">
 
-    <Window.Resources>
-        <!-- 單一 Hue 彩色滑桿 Thumb 樣式 -->
-        <Style x:Key="HueSliderThumbStyle" TargetType="Thumb">
-            <Setter Property="Width" Value="20"/>
-            <Setter Property="Height" Value="20"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Thumb">
-                        <Grid>
-                            <Ellipse Width="20" Height="20"
-                                     Fill="White"
-                                     Stroke="#1E293B"
-                                     StrokeThickness="2"/>
-                            <Ellipse Width="10" Height="10"
-                                     Fill="{DynamicResource AccentPrimaryBrush}"
-                                     HorizontalAlignment="Center"
-                                     VerticalAlignment="Center"/>
-                        </Grid>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <!-- 單一 Hue 彩色滑桿樣式 (0..360 度全彩漸層軌道) -->
-        <Style x:Key="HueRainbowSliderStyle" TargetType="Slider">
-            <Setter Property="Minimum" Value="0"/>
-            <Setter Property="Maximum" Value="360"/>
-            <Setter Property="IsMoveToPointEnabled" Value="True"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Slider">
-                        <Grid VerticalAlignment="Center" Height="24">
-                            <Border Height="12"
-                                    CornerRadius="6"
-                                    BorderBrush="{DynamicResource BorderSubtleBrush}"
-                                    BorderThickness="1"
-                                    VerticalAlignment="Center">
-                                <Border.Background>
-                                    <LinearGradientBrush StartPoint="0,0.5" EndPoint="1,0.5">
-                                        <GradientStop Color="#F23636" Offset="0.000"/>
-                                        <GradientStop Color="#F29436" Offset="0.083"/>
-                                        <GradientStop Color="#F2F236" Offset="0.167"/>
-                                        <GradientStop Color="#36F236" Offset="0.333"/>
-                                        <GradientStop Color="#36F2F2" Offset="0.500"/>
-                                        <GradientStop Color="#3636F2" Offset="0.667"/>
-                                        <GradientStop Color="#F236F2" Offset="0.833"/>
-                                        <GradientStop Color="#F23636" Offset="1.000"/>
-                                    </LinearGradientBrush>
-                                </Border.Background>
-                            </Border>
-                            <Track x:Name="PART_Track">
-                                <Track.DecreaseRepeatButton>
-                                    <RepeatButton Command="Slider.DecreaseLarge" Opacity="0" IsTabStop="False"/>
-                                </Track.DecreaseRepeatButton>
-                                <Track.IncreaseRepeatButton>
-                                    <RepeatButton Command="Slider.IncreaseLarge" Opacity="0" IsTabStop="False"/>
-                                </Track.IncreaseRepeatButton>
-                                <Track.Thumb>
-                                    <Thumb Style="{StaticResource HueSliderThumbStyle}"/>
-                                </Track.Thumb>
-                            </Track>
-                        </Grid>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-    </Window.Resources>
-
     <Grid Margin="22,18,22,18">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -259,39 +189,23 @@
                 </Grid>
             </Border>
 
-            <!-- 4. 主題色彩 (6個活潑預設圓形色塊 + 下方同列左邊圓形色塊與單一Hue彩色滑桿) -->
+            <!-- 4. 主題色彩 (10 個預設圓形色塊) -->
             <Border Background="{DynamicResource BgSecondaryBrush}"
                     BorderBrush="{DynamicResource BorderSubtleBrush}"
                     BorderThickness="1"
                     CornerRadius="{DynamicResource CardCornerRadius}"
                     Padding="14,12">
                 <StackPanel>
-                    <!-- 第一列：標題與目前色彩名稱 + 6 個小型圓形色塊選項 -->
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-
-                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                            <TextBlock Text="主題色彩"
-                                       FontSize="13.5"
-                                       FontWeight="Bold"
-                                       Foreground="{DynamicResource TextPrimaryBrush}"/>
-                            <TextBlock x:Name="TxtActiveColorLabel"
-                                       Text="晴空蔚藍 (#2DB8F5)"
-                                       FontSize="11.5"
-                                       Foreground="{DynamicResource AccentBlueBrush}"
-                                       FontWeight="SemiBold"
-                                       Margin="0,2,0,0"/>
-                        </StackPanel>
-
-                        <!-- 預設 6 個活潑輕鬆的主題色彩 (小型圓形色塊選項) -->
-                        <StackPanel x:Name="PresetSwatchesPanel"
-                                    Grid.Column="1"
-                                    Orientation="Horizontal"
-                                    VerticalAlignment="Center"/>
-                    </Grid>
+                    <TextBlock Text="主題色彩"
+                               FontSize="13.5"
+                               FontWeight="Bold"
+                               Foreground="{DynamicResource TextPrimaryBrush}"/>
+                    <TextBlock x:Name="TxtActiveColorLabel"
+                               Text="晴空蔚藍 (#2DB8F5)"
+                               FontSize="11.5"
+                               Foreground="{DynamicResource AccentBlueBrush}"
+                               FontWeight="SemiBold"
+                               Margin="0,2,0,0"/>
 
                     <!-- 分隔細線 -->
                     <Border Height="1"
@@ -299,53 +213,10 @@
                             Opacity="0.6"
                             Margin="0,11,0,10"/>
 
-                    <!-- 第二列：左邊小型圓形色塊 (呈現目前自訂色彩顏色) + 右邊單一 Hue 彩色滑桿 -->
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="46"/>
-                        </Grid.ColumnDefinitions>
-
-                        <!-- 彩色滑桿同列左邊：小型圓形色塊呈現目前自訂色彩顏色 -->
-                        <Border x:Name="CustomColorOuterRing"
-                                Grid.Column="0"
-                                Width="28" Height="28"
-                                CornerRadius="14"
-                                BorderBrush="{DynamicResource TextPrimaryBrush}"
-                                BorderThickness="2"
-                                Padding="2"
-                                VerticalAlignment="Center"
-                                Margin="0,0,8,0"
-                                ToolTip="目前自訂主題色彩">
-                            <Ellipse x:Name="CustomColorSwatchEllipse"
-                                     Fill="{DynamicResource AccentPrimaryBrush}"/>
-                        </Border>
-
-                        <TextBlock Grid.Column="1"
-                                   Text="自訂 Hue："
-                                   FontSize="12"
-                                   Foreground="{DynamicResource TextSecondaryBrush}"
-                                   VerticalAlignment="Center"
-                                   Margin="0,0,8,0"/>
-
-                        <!-- 單一 Hue 彩色滑桿介面 -->
-                        <Slider x:Name="SliderHue"
-                                Grid.Column="2"
-                                Style="{StaticResource HueRainbowSliderStyle}"
-                                ValueChanged="SliderHue_ValueChanged"
-                                VerticalAlignment="Center"/>
-
-                        <TextBlock x:Name="TxtHueDegree"
-                                   Grid.Column="3"
-                                   Text="199°"
-                                   FontFamily="Consolas"
-                                   FontSize="12"
-                                   Foreground="{DynamicResource TextSecondaryBrush}"
-                                   HorizontalAlignment="Right"
-                                   VerticalAlignment="Center"/>
-                    </Grid>
+                    <!-- 10 個精心調校的主題色彩 (小型圓形色塊選項) -->
+                    <WrapPanel x:Name="PresetSwatchesPanel"
+                               Orientation="Horizontal"
+                               VerticalAlignment="Center"/>
                 </StackPanel>
             </Border>
 

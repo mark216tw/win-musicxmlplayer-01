@@ -103,6 +103,10 @@ flowchart TD
   - 依 `ExpressionPoints` 送出 CC11 表情，並依 `ModulationPointsByChannel` 送出 CC1 顫音；Seek／Pause／Stop 時重置調變避免殘留。
   - `UseInstrumentSpatialProfile` 依 GM 家族調整各聲部 reverb／chorus send，全域滑桿仍作為 master。
 - **離線高速 WAV 匯出 (`ExportToWavFile`)**：建立獨立離線雙合成器實例，以 2048-frame 區塊高速渲染全曲並寫入 44.1kHz / 16-bit PCM `.wav` 檔案。
+- **記憶體映射音源與閒置輸出管理 (Memory-Mapped SoundFont & Idle Suspend)**：
+  - `SoundFont` 樣本改由 `SoundFontSampleData` 以唯讀 `MemoryMappedFile` 存取，`Oscillator` 透過 `unsafe` 指標直接讀取，避免將數百 MB 取樣資料複製到 managed heap。
+  - `SoundFont` 實作 `IDisposable` 與原子引用計數（`TryAddRef` / `Dispose`），切換音源與離線 WAV 匯出可安全共用，並在最後一個引用釋放時立即關閉映射。
+  - 暫停且連續靜音 2 秒後，於背景安全地處置 `WasapiOut`；`Play()`／`PreviewNoteOn()` 會重新初始化輸出，閒置時不佔用音訊裝置。
 
 ### 3.3 `Controls/PianoRollControl.cs` & `PianoKeyboardControl.cs` — 零配置硬體加速向量繪圖
 - 兩者皆直接繼承自 `FrameworkElement` 並覆寫 `OnRender(DrawingContext dc)`，避免傳統 WPF 為數千個音符建立 `Border` / `Rectangle` 視覺樹節點所造成的記憶體暴增與 Layout 卡頓。
@@ -111,10 +115,10 @@ flowchart TD
 - **`FormattedText` 與凍結畫刷快取 (`Frozen Brush & Text Cache`)**：
   - 預先快取小節編號、力度/演奏法標籤與琴鍵音名之 `FormattedText`，並預建 256 階透明度凍結 `SolidColorBrush` 查表，使 60FPS 畫面更新達到零配置（Zero-Allocation）。
 - **實際拍線時間 (`BeatLineTimes`)**：小節內拍線改用載入器計算的實際偏移，正確反映延長記號與呼吸／Cesura 停頓後的非等距拍點。
-- **智慧休眠 60FPS 畫面同步迴圈**：由 `MainWindow` 訂閱 `CompositionTarget.Rendering` 事件，在暫停且動態表歸零時自動跳過重繪，閒置時 CPU 佔用趨近於 0%。
+- **智慧休眠 60FPS 畫面同步迴圈**：由 `MainWindow` 訂閱 `CompositionTarget.Rendering` 事件，在暫停且動態表歸零或視窗最小化時自動解除訂閱，並於播放、拖曳、跳轉時重新掛載，閒置時 CPU 佔用趨近於 0%。
 
 ### 3.4 `Services/ThemeManager.cs` — 即時動態主題與原生 DWM 整合
-- 集中管理 `DisplayMode`（系統 / 淺色 / 深色）、`WindowStyle`（現代圓潤 / 專業俐落 / 主題炫彩 / 古典音樂廳）與 `CurrentHue`（`0°` ~ `360°` HSL 色彩空間轉換）。
+- 集中管理 `DisplayMode`（系統 / 淺色 / 深色）、`WindowStyle`（現代圓潤 / 專業俐落 / 主題炫彩 / 古典音樂廳）與 10 款預設主題色（內部仍以 HSL 色相 `0°` ~ `360°` 轉換）。
 - 變更設定時即時更新 `Application.Current.Resources` 中的所有 `SolidColorBrush` 與 `CornerRadius` 動態資源，並透過 Win32 `DwmSetWindowAttribute` 同步更新所有視窗的原生標題列與邊框色彩。
 
 ---

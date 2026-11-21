@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Runtime;
 using System.Text;
 using System.Windows;
 using MeltySynth;
@@ -11,6 +12,25 @@ namespace WinMusicXmlPlayer
 {
     public partial class App : Application
     {
+        static App()
+        {
+            // 啟用 Multicore JIT（ProfileOptimization），將啟動期間需要編譯的方法交由背景核心平行 JIT，顯著加速後續啟動
+            try
+            {
+                string profileDir = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "WinMusicXmlPlayer",
+                    "JitProfile");
+                Directory.CreateDirectory(profileDir);
+                ProfileOptimization.SetProfileRoot(profileDir);
+                ProfileOptimization.StartProfile("startup.profile");
+            }
+            catch
+            {
+                // 忽略權限或磁碟無法寫入時的例外
+            }
+        }
+
         protected override void OnStartup(StartupEventArgs e)
         {
             ThemeManager.Initialize();
@@ -227,7 +247,7 @@ namespace WinMusicXmlPlayer
 
             try
             {
-                var soundFont = new SoundFont(path);
+                using var soundFont = new SoundFont(path);
                 var preset = soundFont.Presets.FirstOrDefault(p => p.BankNumber == 0 && p.PatchNumber == 0);
                 if (preset == null)
                 {

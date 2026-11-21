@@ -393,7 +393,7 @@ namespace WinMusicXmlPlayer.Services
             if (byteCount <= 0)
                 return false;
 
-            byte[] buffer = ArrayPool<byte>.Shared.Rent(1024 * 1024);
+            byte[] buffer = ArrayPool<byte>.Shared.Rent(16 * 1024);
             try
             {
                 long position = offset;

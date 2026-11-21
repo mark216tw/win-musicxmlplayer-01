@@ -5,6 +5,31 @@
 
 ---
 
+## 📅 2026-11-21 — v1.3.0 記憶體映射音源、啟動加速與 10 款主題色
+
+### 🎯 動機
+1. 高品質 SoundFont 動輒數百 MB，舊版 `SoundFont` 會把整個 `smpl` 取樣區塊讀入 managed `short[]`，造成啟動慢、常駐記憶體高，切換音源時舊資料也不一定即時釋放。
+2. 啟動流程在 UI 執行緒同步載入音源與上次樂譜，視窗需等待許久才出現；暫停或最小化後仍保留 WASAPI 輸出與 60FPS 畫面迴圈。
+3. 使用者希望有更多主題色可選，且不需要自行拖曳 Hue 滑桿；同時希望快速切換最近使用過的音源。
+
+### 🛠 實作
+1. `SoundFontSampleData` 改為支援唯讀 `MemoryMappedFile`：`smpl` 區塊延後映射，`Oscillator` 以 `unsafe` 指標直接讀取樣本，無法映射時才回退至 managed 陣列；同時修正 `LIST`／`smpl` 區塊長度以 `UInt32` 讀取，避免大型檔案溢位。
+2. `SoundFont` 實作 `IDisposable` 與原子引用計數（`TryAddRef`／`Dispose`）；`AudioEngine` 在切換音源、停用鋼琴音源與 `Dispose()` 時釋放舊音源，離線 WAV 匯出則以引用計數安全共用。
+3. 新增 `Services/MemoryOptimizer.cs`：以 `Interlocked` 防止重入與 10 秒冷卻，於背景執行 LOH 壓縮、GC 與 `SetProcessWorkingSetSizeEx` 工作集修剪；播放中一律跳過。
+4. `MainWindow` 啟動時先完成第一幀繪製，再以 `Task.Run` 平行載入 SoundFont 與上次樂譜；點擊播放時若音源仍在載入會自動等待。
+5. `AudioEngine` 在暫停、無作用中音符／預覽鍵且連續 2 秒輸出靜音時，於背景處置 WASAPI 輸出；`Play()`／`PreviewNoteOn()` 會重新初始化。畫面迴圈改為可解除／重新掛載 `CompositionTarget.Rendering`。
+6. `App` 啟用 Multicore JIT profile；`ThemeManager` 偏好設定改用 System.Text.Json 來源產生器，並新增鋼琴／通用音源各 6 筆的最近音源清單與對應選單、下拉選單。
+7. 主題色擴充為 10 款並重新調校色相；移除自訂 Hue 滑桿，載入舊設定時以最接近的預設色對應。
+8. `SoundFontManager` 驗證緩衝區由 1 MB 降為 16 KB；電源喚醒／解鎖僅在播放中或音訊輸出仍存活時才啟動復原流程。
+9. 停止、拖曳時間軸、步進與鍵盤 `Home` 操作統一呼叫 `SyncVisualPositionToTime()`，即時同步卷軸與琴鍵。
+
+### ✅ 驗證
+- `dotnet build -c Release`：0 警告、0 錯誤。
+- `--verify-soundfont`：TimGM6mb.sf2 以記憶體映射載入，鋼琴力度響應單調且可聽，`[ALL PASS]`。
+- `--verify-all`（自建 2 小節 smoke test 樂譜）：音源載入、音訊渲染峰值 `0.1208`、演奏表情自測、UI 自測與偏好設定視窗自測全部 `[ALL PASS]`。
+
+---
+
 ## 📅 2026-11-08 — v1.2.6 低音節奏修正與介面排版調整
 
 ### 🎯 問題與根因
